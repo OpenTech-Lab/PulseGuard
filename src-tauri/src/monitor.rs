@@ -1,5 +1,4 @@
 use std::cmp::Ordering;
-use std::collections::HashMap;
 use std::fs;
 use std::num::NonZeroUsize;
 use std::path::PathBuf;
@@ -130,7 +129,8 @@ impl MonitorController {
 
 fn monitor_loop(inner: Arc<MonitorInner>) {
     let mut system = System::new();
-    let mut last_network = HashMap::<i64, NetCounters>::new();
+    let mut writer = db::SampleWriter::new(&inner.db_path).ok();
+    let mut last_network = NetCounters::default();
     let mut warmup_needed = true;
 
     loop {
@@ -147,7 +147,7 @@ fn monitor_loop(inner: Arc<MonitorInner>) {
 
                 warmup_needed = true;
                 if *mode_guard == MonitorMode::Stopped {
-                    last_network.clear();
+                    last_network = NetCounters::default();
                     if let Ok(mut snapshot) = inner.snapshot.write() {
                         *snapshot = DashboardSnapshot::empty();
                     }
@@ -167,6 +167,7 @@ fn monitor_loop(inner: Arc<MonitorInner>) {
         if warmup_needed {
             system.refresh_memory();
             system.refresh_processes(ProcessesToUpdate::All, true);
+            last_network = read_total_net_bytes();
             thread::sleep(MINIMUM_CPU_UPDATE_INTERVAL);
             warmup_needed = false;
         }
@@ -178,14 +179,15 @@ fn monitor_loop(inner: Arc<MonitorInner>) {
             .expect("settings lock poisoned")
             .retention_days;
 
-        if let Err(error) = db::insert_samples(
-            &inner.db_path,
-            &snapshot.processes,
-            snapshot.totals.mem_total_bytes,
-            snapshot.totals.memory_capacity_bytes,
-            retention_days,
-        ) {
-            eprintln!("pulseguard: failed to persist process samples: {error}");
+        if writer.is_none() {
+            writer = db::SampleWriter::new(&inner.db_path).ok();
+        }
+
+        if let Some(store) = writer.as_mut() {
+            if let Err(error) = store.insert_snapshot(&snapshot, retention_days) {
+                eprintln!("pulseguard: failed to persist process samples: {error}");
+                writer = None;
+            }
         }
 
         if let Ok(mut current) = inner.snapshot.write() {
@@ -210,10 +212,7 @@ fn monitor_loop(inner: Arc<MonitorInner>) {
     }
 }
 
-fn collect_snapshot(
-    system: &mut System,
-    last_network: &mut HashMap<i64, NetCounters>,
-) -> DashboardSnapshot {
+fn collect_snapshot(system: &mut System, last_network: &mut NetCounters) -> DashboardSnapshot {
     system.refresh_memory();
     system.refresh_processes(ProcessesToUpdate::All, true);
 
@@ -221,12 +220,20 @@ fn collect_snapshot(
     let cpu_capacity_percent = logical_thread_count() as f64 * 100.0;
     let total_memory = system.total_memory().max(1);
     let used_memory = system.used_memory();
-    let mut active_network = HashMap::new();
+    let current_network = read_total_net_bytes();
+    let recv_delta = current_network
+        .recv_bytes
+        .saturating_sub(last_network.recv_bytes);
+    let sent_delta = current_network
+        .sent_bytes
+        .saturating_sub(last_network.sent_bytes);
     let mut processes = Vec::new();
     let mut totals = SampleTotals {
         cpu_capacity_percent,
         mem_total_bytes: used_memory,
         memory_capacity_bytes: total_memory,
+        net_recv_total: recv_delta,
+        net_sent_total: sent_delta,
         ..SampleTotals::default()
     };
 
@@ -238,16 +245,6 @@ fn collect_snapshot(
         }
 
         let disk = process.disk_usage();
-        let network = read_process_net_bytes(pid_value);
-        let previous_network = last_network.get(&pid_value).copied().unwrap_or_default();
-        let recv_delta = network
-            .recv_bytes
-            .saturating_sub(previous_network.recv_bytes);
-        let sent_delta = network
-            .sent_bytes
-            .saturating_sub(previous_network.sent_bytes);
-        active_network.insert(pid_value, network);
-
         let cpu_percent = round_metric(process.cpu_usage() as f64);
         let mem_bytes = process.memory();
         let sample = ProcessSample {
@@ -258,8 +255,8 @@ fn collect_snapshot(
             mem_bytes,
             disk_read_bytes: disk.read_bytes,
             disk_write_bytes: disk.written_bytes,
-            net_recv_bytes: recv_delta,
-            net_sent_bytes: sent_delta,
+            net_recv_bytes: 0,
+            net_sent_bytes: 0,
         };
 
         if !should_store_sample(&sample, total_memory) {
@@ -269,8 +266,6 @@ fn collect_snapshot(
         totals.cpu_total += sample.cpu_percent;
         totals.disk_read_total += sample.disk_read_bytes;
         totals.disk_write_total += sample.disk_write_bytes;
-        totals.net_recv_total += sample.net_recv_bytes;
-        totals.net_sent_total += sample.net_sent_bytes;
         processes.push(sample);
     }
 
@@ -278,7 +273,7 @@ fn collect_snapshot(
     totals.process_count = processes.len();
     processes.sort_by(compare_samples);
 
-    *last_network = active_network;
+    *last_network = current_network;
 
     DashboardSnapshot {
         timestamp: Some(timestamp),
@@ -292,8 +287,6 @@ fn should_store_sample(sample: &ProcessSample, total_memory: u64) -> bool {
         || sample.mem_bytes as f64 / total_memory as f64 >= 0.001
         || sample.disk_read_bytes > 0
         || sample.disk_write_bytes > 0
-        || sample.net_recv_bytes > 0
-        || sample.net_sent_bytes > 0
 }
 
 fn compare_samples(left: &ProcessSample, right: &ProcessSample) -> Ordering {
@@ -307,7 +300,6 @@ fn sample_score(sample: &ProcessSample) -> f64 {
     sample.cpu_percent * 6.0
         + (sample.mem_bytes as f64 / BYTES_PER_GIB) * 2.5
         + (sample.disk_read_bytes + sample.disk_write_bytes) as f64 / 1024.0
-        + (sample.net_recv_bytes + sample.net_sent_bytes) as f64 / 1024.0
 }
 
 fn round_metric(value: f64) -> f64 {
@@ -318,9 +310,8 @@ fn pid_to_i64(pid: Pid) -> i64 {
     i64::from(pid.as_u32())
 }
 
-fn read_process_net_bytes(pid: i64) -> NetCounters {
-    let path = format!("/proc/{pid}/net/dev");
-    let Ok(contents) = fs::read_to_string(path) else {
+fn read_total_net_bytes() -> NetCounters {
+    let Ok(contents) = fs::read_to_string("/proc/net/dev") else {
         return NetCounters::default();
     };
 

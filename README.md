@@ -2,11 +2,12 @@
 
 PulseGuard is a lightweight Linux desktop monitor built with Tauri, Rust, React, TypeScript, Tailwind, Chart.js, and SQLite.
 
-It records per-process CPU, memory, disk I/O, and best-effort internet I/O deltas into `~/.config/pulseguard/pulseguard.db`, then renders live tables and historical charts from that local archive.
+It records per-process CPU, memory, and disk I/O plus system-wide network deltas into `~/.config/pulseguard/pulseguard.db`, then renders live tables and historical charts from that local archive.
 
 ## Features
 
-- Per-process CPU, memory, disk read/write, and internet receive/send deltas
+- Per-process CPU, memory, and disk read/write deltas
+- System-wide network receive/send deltas
 - Configurable sampling interval and retention window
 - SQLite-backed history with CSV and JSON export
 - Searchable, sortable dashboard with live charts
@@ -59,4 +60,3 @@ Cut a new version:
 ```
 
 That script updates the frontend version, the Rust package version, the Tauri bundle version, release notes under `scripts/version/`, creates a release commit, tags it as `v<version>`, and pushes the branch and tag unless you disable those steps with flags.
-

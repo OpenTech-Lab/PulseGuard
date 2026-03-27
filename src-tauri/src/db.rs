@@ -1,15 +1,130 @@
 use std::fmt::Write as FmtWrite;
 use std::fs;
 use std::path::Path;
+use std::time::{Duration as StdDuration, Instant};
 
 use chrono::{Duration, Utc};
 use rusqlite::{params, Connection};
 
 use crate::error::AppResult;
-use crate::models::{ExportFormat, ExportResult, HistoryPoint, ProcessSample};
+use crate::models::{DashboardSnapshot, ExportFormat, ExportResult, HistoryPoint, ProcessSample};
+
+const PRUNE_INTERVAL: StdDuration = StdDuration::from_secs(60 * 60);
+
+pub struct SampleWriter {
+    connection: Connection,
+    last_prune_at: Option<Instant>,
+}
+
+impl SampleWriter {
+    pub fn new(db_path: &Path) -> AppResult<Self> {
+        Ok(Self {
+            connection: open_connection(db_path)?,
+            last_prune_at: None,
+        })
+    }
+
+    pub fn insert_snapshot(
+        &mut self,
+        snapshot: &DashboardSnapshot,
+        retention_days: u32,
+    ) -> AppResult<()> {
+        let Some(timestamp) = snapshot.timestamp.as_deref() else {
+            return Ok(());
+        };
+
+        let prune_due = self
+            .last_prune_at
+            .is_none_or(|last_run| last_run.elapsed() >= PRUNE_INTERVAL);
+        let cutoff = prune_due
+            .then(|| (Utc::now() - Duration::days(i64::from(retention_days))).to_rfc3339());
+        let transaction = self.connection.transaction()?;
+
+        if let Some(cutoff) = cutoff {
+            prune_old_rows(&transaction, &cutoff)?;
+        }
+
+        transaction.execute(
+            r#"
+            INSERT INTO sample_totals (
+                timestamp,
+                cpu_total,
+                cpu_capacity_percent,
+                mem_total_bytes,
+                memory_capacity_bytes,
+                disk_read_total,
+                disk_write_total,
+                net_recv_total,
+                net_sent_total,
+                process_count
+            )
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+            "#,
+            params![
+                timestamp,
+                snapshot.totals.cpu_total,
+                snapshot.totals.cpu_capacity_percent,
+                snapshot.totals.mem_total_bytes,
+                snapshot.totals.memory_capacity_bytes,
+                snapshot.totals.disk_read_total,
+                snapshot.totals.disk_write_total,
+                snapshot.totals.net_recv_total,
+                snapshot.totals.net_sent_total,
+                snapshot.totals.process_count as i64,
+            ],
+        )?;
+
+        if !snapshot.processes.is_empty() {
+            let mut statement = transaction.prepare(
+                r#"
+                INSERT INTO process_stats (
+                    timestamp,
+                    pid,
+                    name,
+                    cpu_percent,
+                    mem_percent,
+                    mem_bytes,
+                    mem_used_bytes,
+                    memory_capacity_bytes,
+                    disk_read_bytes,
+                    disk_write_bytes,
+                    net_recv_bytes,
+                    net_sent_bytes
+                )
+                VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
+                "#,
+            )?;
+
+            for sample in &snapshot.processes {
+                statement.execute(params![
+                    sample.timestamp,
+                    sample.pid,
+                    sample.name,
+                    sample.cpu_percent,
+                    0.0_f64,
+                    sample.mem_bytes,
+                    snapshot.totals.mem_total_bytes,
+                    snapshot.totals.memory_capacity_bytes,
+                    sample.disk_read_bytes,
+                    sample.disk_write_bytes,
+                    sample.net_recv_bytes,
+                    sample.net_sent_bytes,
+                ])?;
+            }
+        }
+
+        transaction.commit()?;
+
+        if prune_due {
+            self.last_prune_at = Some(Instant::now());
+        }
+
+        Ok(())
+    }
+}
 
 pub fn init_db(db_path: &Path) -> AppResult<()> {
-    let connection = Connection::open(db_path)?;
+    let connection = open_connection(db_path)?;
     connection.execute_batch(
         r#"
         CREATE TABLE IF NOT EXISTS process_stats (
@@ -31,9 +146,31 @@ pub fn init_db(db_path: &Path) -> AppResult<()> {
         CREATE INDEX IF NOT EXISTS idx_timestamp ON process_stats(timestamp);
         CREATE INDEX IF NOT EXISTS idx_name ON process_stats(name);
         CREATE INDEX IF NOT EXISTS idx_pid ON process_stats(pid);
+
+        CREATE TABLE IF NOT EXISTS sample_totals (
+            id                    INTEGER PRIMARY KEY,
+            timestamp             TEXT NOT NULL,
+            cpu_total             REAL NOT NULL,
+            cpu_capacity_percent  REAL NOT NULL,
+            mem_total_bytes       INTEGER DEFAULT 0,
+            memory_capacity_bytes INTEGER DEFAULT 0,
+            disk_read_total       INTEGER DEFAULT 0,
+            disk_write_total      INTEGER DEFAULT 0,
+            net_recv_total        INTEGER DEFAULT 0,
+            net_sent_total        INTEGER DEFAULT 0,
+            process_count         INTEGER DEFAULT 0
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_sample_totals_timestamp
+        ON sample_totals(timestamp);
         "#,
     )?;
-    ensure_column(&connection, "process_stats", "mem_bytes", "INTEGER DEFAULT 0")?;
+    ensure_column(
+        &connection,
+        "process_stats",
+        "mem_bytes",
+        "INTEGER DEFAULT 0",
+    )?;
     ensure_column(
         &connection,
         "process_stats",
@@ -49,104 +186,15 @@ pub fn init_db(db_path: &Path) -> AppResult<()> {
     Ok(())
 }
 
-pub fn insert_samples(
-    db_path: &Path,
-    samples: &[ProcessSample],
-    mem_used_bytes: u64,
-    memory_capacity_bytes: u64,
-    retention_days: u32,
-) -> AppResult<()> {
-    let mut connection = Connection::open(db_path)?;
-    let transaction = connection.transaction()?;
-
-    let cutoff = (Utc::now() - Duration::days(i64::from(retention_days))).to_rfc3339();
-    transaction.execute(
-        "DELETE FROM process_stats WHERE timestamp < ?1",
-        params![cutoff],
-    )?;
-
-    if !samples.is_empty() {
-        let mut statement = transaction.prepare(
-            r#"
-            INSERT INTO process_stats (
-                timestamp,
-                pid,
-                name,
-                cpu_percent,
-                mem_percent,
-                mem_bytes,
-                mem_used_bytes,
-                memory_capacity_bytes,
-                disk_read_bytes,
-                disk_write_bytes,
-                net_recv_bytes,
-                net_sent_bytes
-            )
-            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
-            "#,
-        )?;
-
-        for sample in samples {
-            statement.execute(params![
-                sample.timestamp,
-                sample.pid,
-                sample.name,
-                sample.cpu_percent,
-                0.0_f64,
-                sample.mem_bytes,
-                mem_used_bytes,
-                memory_capacity_bytes,
-                sample.disk_read_bytes,
-                sample.disk_write_bytes,
-                sample.net_recv_bytes,
-                sample.net_sent_bytes,
-            ])?;
-        }
-    }
-
-    transaction.commit()?;
-    Ok(())
-}
-
 pub fn load_history(db_path: &Path, hours: u32) -> AppResult<Vec<HistoryPoint>> {
-    let connection = Connection::open(db_path)?;
+    let connection = open_connection(db_path)?;
     let cutoff = (Utc::now() - Duration::hours(i64::from(hours.max(1)))).to_rfc3339();
+    let history = load_history_from_sample_totals(&connection, &cutoff)?;
 
-    let mut statement = connection.prepare(
-        r#"
-        SELECT
-            timestamp,
-            ROUND(COALESCE(SUM(cpu_percent), 0), 2) AS cpu_total,
-            COALESCE(MAX(mem_used_bytes), 0) AS mem_total_bytes,
-            COALESCE(SUM(disk_read_bytes), 0) AS disk_read_total,
-            COALESCE(SUM(disk_write_bytes), 0) AS disk_write_total,
-            COALESCE(SUM(net_recv_bytes), 0) AS net_recv_total,
-            COALESCE(SUM(net_sent_bytes), 0) AS net_sent_total,
-            COUNT(*) AS process_count
-        FROM process_stats
-        WHERE timestamp >= ?1
-        GROUP BY timestamp
-        ORDER BY timestamp ASC
-        "#,
-    )?;
-
-    let rows = statement.query_map(params![cutoff], |row| {
-        Ok(HistoryPoint {
-            timestamp: row.get(0)?,
-            cpu_total: row.get(1)?,
-            mem_total_bytes: row.get(2)?,
-            disk_read_total: row.get(3)?,
-            disk_write_total: row.get(4)?,
-            net_recv_total: row.get(5)?,
-            net_sent_total: row.get(6)?,
-            process_count: row.get::<_, i64>(7)? as usize,
-        })
-    })?;
-
-    let mut history = Vec::new();
-    for row in rows {
-        history.push(row?);
+    if history.is_empty() {
+        return load_history_from_process_stats(&connection, &cutoff);
     }
+
     Ok(history)
 }
 
@@ -198,7 +246,7 @@ pub fn export_samples(
 }
 
 fn load_rows(db_path: &Path, hours: u32) -> AppResult<Vec<ProcessSample>> {
-    let connection = Connection::open(db_path)?;
+    let connection = open_connection(db_path)?;
     let cutoff = (Utc::now() - Duration::hours(i64::from(hours.max(1)))).to_rfc3339();
 
     let mut statement = connection.prepare(
@@ -238,6 +286,114 @@ fn load_rows(db_path: &Path, hours: u32) -> AppResult<Vec<ProcessSample>> {
         samples.push(row?);
     }
     Ok(samples)
+}
+
+fn load_history_from_sample_totals(
+    connection: &Connection,
+    cutoff: &str,
+) -> AppResult<Vec<HistoryPoint>> {
+    let mut statement = connection.prepare(
+        r#"
+        SELECT
+            timestamp,
+            cpu_total,
+            mem_total_bytes,
+            disk_read_total,
+            disk_write_total,
+            net_recv_total,
+            net_sent_total,
+            process_count
+        FROM sample_totals
+        WHERE timestamp >= ?1
+        ORDER BY timestamp ASC
+        "#,
+    )?;
+
+    let rows = statement.query_map(params![cutoff], |row| {
+        Ok(HistoryPoint {
+            timestamp: row.get(0)?,
+            cpu_total: row.get(1)?,
+            mem_total_bytes: row.get(2)?,
+            disk_read_total: row.get(3)?,
+            disk_write_total: row.get(4)?,
+            net_recv_total: row.get(5)?,
+            net_sent_total: row.get(6)?,
+            process_count: row.get::<_, i64>(7)? as usize,
+        })
+    })?;
+
+    let mut history = Vec::new();
+    for row in rows {
+        history.push(row?);
+    }
+    Ok(history)
+}
+
+fn load_history_from_process_stats(
+    connection: &Connection,
+    cutoff: &str,
+) -> AppResult<Vec<HistoryPoint>> {
+    let mut statement = connection.prepare(
+        r#"
+        SELECT
+            timestamp,
+            ROUND(COALESCE(SUM(cpu_percent), 0), 2) AS cpu_total,
+            COALESCE(MAX(mem_used_bytes), 0) AS mem_total_bytes,
+            COALESCE(SUM(disk_read_bytes), 0) AS disk_read_total,
+            COALESCE(SUM(disk_write_bytes), 0) AS disk_write_total,
+            COALESCE(SUM(net_recv_bytes), 0) AS net_recv_total,
+            COALESCE(SUM(net_sent_bytes), 0) AS net_sent_total,
+            COUNT(*) AS process_count
+        FROM process_stats
+        WHERE timestamp >= ?1
+        GROUP BY timestamp
+        ORDER BY timestamp ASC
+        "#,
+    )?;
+
+    let rows = statement.query_map(params![cutoff], |row| {
+        Ok(HistoryPoint {
+            timestamp: row.get(0)?,
+            cpu_total: row.get(1)?,
+            mem_total_bytes: row.get(2)?,
+            disk_read_total: row.get(3)?,
+            disk_write_total: row.get(4)?,
+            net_recv_total: row.get(5)?,
+            net_sent_total: row.get(6)?,
+            process_count: row.get::<_, i64>(7)? as usize,
+        })
+    })?;
+
+    let mut history = Vec::new();
+    for row in rows {
+        history.push(row?);
+    }
+    Ok(history)
+}
+
+fn open_connection(db_path: &Path) -> AppResult<Connection> {
+    let connection = Connection::open(db_path)?;
+    connection.execute_batch(
+        r#"
+        PRAGMA journal_mode = WAL;
+        PRAGMA synchronous = NORMAL;
+        PRAGMA temp_store = MEMORY;
+        PRAGMA busy_timeout = 5000;
+        "#,
+    )?;
+    Ok(connection)
+}
+
+fn prune_old_rows(transaction: &rusqlite::Transaction<'_>, cutoff: &str) -> AppResult<()> {
+    transaction.execute(
+        "DELETE FROM process_stats WHERE timestamp < ?1",
+        params![cutoff],
+    )?;
+    transaction.execute(
+        "DELETE FROM sample_totals WHERE timestamp < ?1",
+        params![cutoff],
+    )?;
+    Ok(())
 }
 
 fn csv_escape(value: &str) -> String {

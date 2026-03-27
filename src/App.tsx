@@ -11,14 +11,15 @@ import {
 } from "chart.js";
 import type { ChartOptions } from "chart.js";
 import { listen } from "@tauri-apps/api/event";
-import { startTransition, useDeferredValue, useEffect, useState } from "react";
+import { startTransition, useDeferredValue, useEffect, useEffectEvent, useState } from "react";
 import type { CSSProperties } from "react";
 import { Line } from "react-chartjs-2";
-import { exportSamples, getDashboard, getHistory, setMonitorMode, updateSettings } from "./lib/api";
+import { exportSamples, getDashboard, setMonitorMode, updateSettings } from "./lib/api";
 import type {
   DashboardPayload,
   DashboardSnapshot,
   ExportFormat,
+  HistoryPoint,
   MonitorMode,
   MonitorSettings,
   ProcessSample,
@@ -49,9 +50,7 @@ type SortKey =
   | "cpu_percent"
   | "mem_bytes"
   | "disk_read_bytes"
-  | "disk_write_bytes"
-  | "net_recv_bytes"
-  | "net_sent_bytes";
+  | "disk_write_bytes";
 
 type TabKey = "activity" | "settings" | "processes";
 const matrixGlyphs = [
@@ -127,6 +126,37 @@ function formatTimestamp(value: string | null) {
 
 function buildRainColumn(index: number) {
   return Array.from({ length: 18 }, (_, line) => matrixGlyphs[(index * 2 + line) % matrixGlyphs.length]).join("\n");
+}
+
+function historyPointFromSnapshot(snapshot: DashboardSnapshot): HistoryPoint | null {
+  if (!snapshot.timestamp) {
+    return null;
+  }
+
+  return {
+    timestamp: snapshot.timestamp,
+    cpu_total: snapshot.totals.cpu_total,
+    mem_total_bytes: snapshot.totals.mem_total_bytes,
+    disk_read_total: snapshot.totals.disk_read_total,
+    disk_write_total: snapshot.totals.disk_write_total,
+    net_recv_total: snapshot.totals.net_recv_total,
+    net_sent_total: snapshot.totals.net_sent_total,
+    process_count: snapshot.totals.process_count,
+  };
+}
+
+function mergeHistoryPoint(history: HistoryPoint[], nextPoint: HistoryPoint, rangeHours: number) {
+  const cutoff = Date.now() - rangeHours * 60 * 60 * 1000;
+  const nextHistory = history
+    .filter((point) => point.timestamp !== nextPoint.timestamp)
+    .filter((point) => {
+      const timestamp = Date.parse(point.timestamp);
+      return Number.isNaN(timestamp) || timestamp >= cutoff;
+    });
+
+  nextHistory.push(nextPoint);
+  nextHistory.sort((left, right) => Date.parse(left.timestamp) - Date.parse(right.timestamp));
+  return nextHistory;
 }
 
 function buildChartOptions(
@@ -343,27 +373,40 @@ export default function App() {
     }
   }
 
-  async function refreshHistory(rangeHours: number) {
-    try {
-      const nextHistory = await getHistory(rangeHours);
-      startTransition(() => {
-        setDashboard((current) =>
-          current
-            ? {
-                ...current,
-                history: nextHistory,
-              }
-            : current,
-        );
-      });
-    } catch (historyError) {
-      setError(historyError instanceof Error ? historyError.message : String(historyError));
-    }
-  }
-
   useEffect(() => {
     void hydrate(historyHours);
   }, [historyHours]);
+
+  const applySample = useEffectEvent((snapshot: DashboardSnapshot) => {
+    const nextHistoryPoint = historyPointFromSnapshot(snapshot);
+
+    startTransition(() => {
+      setDashboard((current) =>
+        current
+          ? {
+              ...current,
+              snapshot,
+              history: nextHistoryPoint
+                ? mergeHistoryPoint(current.history, nextHistoryPoint, historyHours)
+                : current.history,
+            }
+          : current,
+      );
+    });
+  });
+
+  const applyStatus = useEffectEvent((status: MonitorMode) => {
+    startTransition(() => {
+      setDashboard((current) =>
+        current
+          ? {
+              ...current,
+              status,
+            }
+          : current,
+      );
+    });
+  });
 
   useEffect(() => {
     let unlistenSample: (() => void) | undefined;
@@ -371,30 +414,11 @@ export default function App() {
 
     const register = async () => {
       unlistenSample = await listen<DashboardSnapshot>("monitor://sample", (event) => {
-        startTransition(() => {
-          setDashboard((current) =>
-            current
-              ? {
-                  ...current,
-                  snapshot: event.payload,
-                }
-              : current,
-          );
-        });
-        void refreshHistory(historyHours);
+        applySample(event.payload);
       });
 
       unlistenStatus = await listen<StatusPayload>("monitor://status", (event) => {
-        startTransition(() => {
-          setDashboard((current) =>
-            current
-              ? {
-                  ...current,
-                  status: event.payload.status,
-                }
-              : current,
-          );
-        });
+        applyStatus(event.payload.status);
       });
     };
 
@@ -404,7 +428,7 @@ export default function App() {
       unlistenSample?.();
       unlistenStatus?.();
     };
-  }, [historyHours]);
+  }, []);
 
   async function applyMonitorMode(mode: MonitorMode) {
     try {
@@ -471,7 +495,7 @@ export default function App() {
   }
 
   const rows = dashboard?.snapshot.processes ?? [];
-  const filteredRows = rows
+  const filteredRows = [...rows]
     .filter((row) =>
       row.name.toLowerCase().includes(deferredSearch.trim().toLowerCase()) ||
       String(row.pid).includes(deferredSearch.trim()),
@@ -955,8 +979,6 @@ export default function App() {
                     ["mem_bytes", "Memory"],
                     ["disk_read_bytes", "Disk Read"],
                     ["disk_write_bytes", "Disk Write"],
-                    ["net_recv_bytes", "Net Recv"],
-                    ["net_sent_bytes", "Net Sent"],
                   ].map(([key, label]) => (
                     <th key={key} className="px-3 py-2 font-medium">
                       <button
@@ -983,9 +1005,7 @@ export default function App() {
                     <td className="px-3 py-2.5 font-mono">{formatPercent(row.cpu_percent)}</td>
                     <td className="px-3 py-2.5 font-mono">{formatGigabytes(row.mem_bytes)}</td>
                     <td className="px-3 py-2.5 font-mono">{formatBytes(row.disk_read_bytes)}</td>
-                    <td className="px-3 py-2.5 font-mono">{formatBytes(row.disk_write_bytes)}</td>
-                    <td className="px-3 py-2.5 font-mono">{formatCompactBytes(row.net_recv_bytes)}</td>
-                    <td className="rounded-r-2xl px-3 py-2.5 font-mono">{formatCompactBytes(row.net_sent_bytes)}</td>
+                    <td className="rounded-r-2xl px-3 py-2.5 font-mono">{formatBytes(row.disk_write_bytes)}</td>
                   </tr>
                 ))}
               </tbody>
