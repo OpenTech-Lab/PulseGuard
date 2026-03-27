@@ -33,6 +33,8 @@ export interface HistoryPoint {
   timestamp: string;
   cpu_total: number;
   mem_total: number;
+  disk_read_total: number;
+  disk_write_total: number;
   net_recv_total: number;
   net_sent_total: number;
   process_count: number;
@@ -61,4 +63,3 @@ export interface ExportResult {
 export interface StatusPayload {
   status: MonitorMode;
 }
-

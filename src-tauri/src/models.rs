@@ -80,6 +80,8 @@ pub struct HistoryPoint {
     pub timestamp: String,
     pub cpu_total: f64,
     pub mem_total: f64,
+    pub disk_read_total: u64,
+    pub disk_write_total: u64,
     pub net_recv_total: u64,
     pub net_sent_total: u64,
     pub process_count: usize,

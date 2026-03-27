@@ -94,6 +94,8 @@ pub fn load_history(db_path: &Path, hours: u32) -> AppResult<Vec<HistoryPoint>> 
             timestamp,
             ROUND(COALESCE(SUM(cpu_percent), 0), 2) AS cpu_total,
             ROUND(COALESCE(SUM(mem_percent), 0), 2) AS mem_total,
+            COALESCE(SUM(disk_read_bytes), 0) AS disk_read_total,
+            COALESCE(SUM(disk_write_bytes), 0) AS disk_write_total,
             COALESCE(SUM(net_recv_bytes), 0) AS net_recv_total,
             COALESCE(SUM(net_sent_bytes), 0) AS net_sent_total,
             COUNT(*) AS process_count
@@ -109,9 +111,11 @@ pub fn load_history(db_path: &Path, hours: u32) -> AppResult<Vec<HistoryPoint>> 
             timestamp: row.get(0)?,
             cpu_total: row.get(1)?,
             mem_total: row.get(2)?,
-            net_recv_total: row.get(3)?,
-            net_sent_total: row.get(4)?,
-            process_count: row.get::<_, i64>(5)? as usize,
+            disk_read_total: row.get(3)?,
+            disk_write_total: row.get(4)?,
+            net_recv_total: row.get(5)?,
+            net_sent_total: row.get(6)?,
+            process_count: row.get::<_, i64>(7)? as usize,
         })
     })?;
 

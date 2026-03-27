@@ -155,10 +155,6 @@ function buildChartOptions(
           color: "rgba(85, 255, 122, 0.08)",
         },
         ticks: {
-          callback: (value) =>
-            valueMode === "bytes"
-              ? formatCompactBytes(Number(value))
-              : formatPercent(Number(value)),
           color: "rgba(150, 255, 170, 0.56)",
           font: {
             family: "IBM Plex Mono, JetBrains Mono, monospace",
@@ -173,6 +169,10 @@ function buildChartOptions(
           color: "rgba(85, 255, 122, 0.08)",
         },
         ticks: {
+          callback: (value) =>
+            valueMode === "bytes"
+              ? formatCompactBytes(Number(value))
+              : formatPercent(Number(value)),
           color: "rgba(150, 255, 170, 0.56)",
           font: {
             family: "IBM Plex Mono, JetBrains Mono, monospace",
@@ -519,6 +519,32 @@ export default function App() {
     labels: chartLabels,
   };
 
+  const diskHistory = {
+    datasets: [
+      {
+        backgroundColor: "rgba(126, 255, 112, 0.08)",
+        borderColor: "rgba(156, 255, 138, 0.88)",
+        borderWidth: 2,
+        data: (dashboard?.history ?? []).map((point) => point.disk_read_total),
+        fill: true,
+        label: "DISK_RX",
+        pointRadius: 0,
+        tension: 0.32,
+      },
+      {
+        backgroundColor: "rgba(74, 200, 96, 0.06)",
+        borderColor: "rgba(102, 234, 124, 0.8)",
+        borderWidth: 2,
+        data: (dashboard?.history ?? []).map((point) => point.disk_write_total),
+        fill: true,
+        label: "DISK_TX",
+        pointRadius: 0,
+        tension: 0.32,
+      },
+    ],
+    labels: chartLabels,
+  };
+
   function toggleSort(nextKey: SortKey) {
     if (sortKey === nextKey) {
       setSortDirection((current) => (current === "asc" ? "desc" : "asc"));
@@ -719,20 +745,29 @@ export default function App() {
               ))}
             </div>
           </div>
-          <div className="mt-4 grid min-w-0 gap-3 xl:grid-cols-3">
-            <div className="soft-panel chart-shell h-60 min-w-0 overflow-hidden p-3">
-              <div className="h-full min-w-0">
-                <Line data={cpuHistory} options={buildChartOptions("CPU %", "percent")} />
+          <div className="mt-4 grid min-w-0 gap-3 md:grid-cols-2">
+            <div className="grid min-w-0 gap-3">
+              <div className="soft-panel chart-shell h-56 min-w-0 overflow-hidden p-3">
+                <div className="h-full min-w-0">
+                  <Line data={cpuHistory} options={buildChartOptions("CPU %", "percent")} />
+                </div>
+              </div>
+              <div className="soft-panel chart-shell h-56 min-w-0 overflow-hidden p-3">
+                <div className="h-full min-w-0">
+                  <Line data={memoryHistory} options={buildChartOptions("Memory %", "percent")} />
+                </div>
               </div>
             </div>
-            <div className="soft-panel chart-shell h-60 min-w-0 overflow-hidden p-3">
-              <div className="h-full min-w-0">
-                <Line data={memoryHistory} options={buildChartOptions("Memory %", "percent")} />
+            <div className="grid min-w-0 gap-3">
+              <div className="soft-panel chart-shell h-56 min-w-0 overflow-hidden p-3">
+                <div className="h-full min-w-0">
+                  <Line data={networkHistory} options={buildChartOptions("Net I/O", "bytes")} />
+                </div>
               </div>
-            </div>
-            <div className="soft-panel chart-shell h-60 min-w-0 overflow-hidden p-3">
-              <div className="h-full min-w-0">
-                <Line data={networkHistory} options={buildChartOptions("Data", "bytes")} />
+              <div className="soft-panel chart-shell h-56 min-w-0 overflow-hidden p-3">
+                <div className="h-full min-w-0">
+                  <Line data={diskHistory} options={buildChartOptions("Disk I/O", "bytes")} />
+                </div>
               </div>
             </div>
           </div>
