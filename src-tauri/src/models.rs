@@ -40,7 +40,7 @@ pub struct ProcessSample {
     pub pid: i64,
     pub name: String,
     pub cpu_percent: f64,
-    pub mem_percent: f64,
+    pub mem_bytes: u64,
     pub disk_read_bytes: u64,
     pub disk_write_bytes: u64,
     pub net_recv_bytes: u64,
@@ -50,7 +50,8 @@ pub struct ProcessSample {
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub struct SampleTotals {
     pub cpu_total: f64,
-    pub mem_total: f64,
+    pub mem_total_bytes: u64,
+    pub memory_capacity_bytes: u64,
     pub disk_read_total: u64,
     pub disk_write_total: u64,
     pub net_recv_total: u64,
@@ -79,7 +80,7 @@ impl DashboardSnapshot {
 pub struct HistoryPoint {
     pub timestamp: String,
     pub cpu_total: f64,
-    pub mem_total: f64,
+    pub mem_total_bytes: u64,
     pub disk_read_total: u64,
     pub disk_write_total: u64,
     pub net_recv_total: u64,

@@ -42,11 +42,12 @@ const numberFormat = new Intl.NumberFormat("en-US", {
 });
 
 const historyRangeOptions = [6, 12, 24, 72];
+const BYTES_PER_GB = 1024 ** 3;
 
 type SortKey =
   | "name"
   | "cpu_percent"
-  | "mem_percent"
+  | "mem_bytes"
   | "disk_read_bytes"
   | "disk_write_bytes"
   | "net_recv_bytes"
@@ -83,6 +84,16 @@ function formatBytes(value: number) {
   return `${numberFormat.format(remainder)} ${units[unitIndex]}`;
 }
 
+function formatGigabytes(value: number) {
+  const gigabytes = value / BYTES_PER_GB;
+  const maximumFractionDigits = gigabytes >= 100 ? 0 : gigabytes >= 10 ? 1 : gigabytes >= 1 ? 2 : 3;
+
+  return `${gigabytes.toLocaleString("en-US", {
+    maximumFractionDigits,
+    minimumFractionDigits: 0,
+  })} GB`;
+}
+
 function formatCompactBytes(value: number) {
   const units = ["B", "K", "M", "G", "T"];
   let remainder = value;
@@ -112,7 +123,7 @@ function buildRainColumn(index: number) {
 
 function buildChartOptions(
   label: string,
-  valueMode: "bytes" | "percent" = "percent",
+  valueMode: "bytes" | "gigabytes" | "percent" = "percent",
 ): ChartOptions<"line"> {
   return {
     animation: false,
@@ -139,7 +150,11 @@ function buildChartOptions(
           label: (context) => {
             const value = Number(context.parsed.y ?? 0);
             const formatted =
-              valueMode === "bytes" ? formatCompactBytes(value) : formatPercent(value);
+              valueMode === "bytes"
+                ? formatCompactBytes(value)
+                : valueMode === "gigabytes"
+                  ? formatGigabytes(value)
+                  : formatPercent(value);
             return `${context.dataset.label}: ${formatted}`;
           },
         },
@@ -172,6 +187,8 @@ function buildChartOptions(
           callback: (value) =>
             valueMode === "bytes"
               ? formatCompactBytes(Number(value))
+              : valueMode === "gigabytes"
+                ? formatGigabytes(Number(value))
               : formatPercent(Number(value)),
           color: "rgba(150, 255, 170, 0.56)",
           font: {
@@ -483,7 +500,7 @@ export default function App() {
         backgroundColor: "rgba(147, 255, 95, 0.1)",
         borderColor: "rgba(189, 255, 112, 0.92)",
         borderWidth: 2,
-        data: (dashboard?.history ?? []).map((point) => point.mem_total),
+        data: (dashboard?.history ?? []).map((point) => point.mem_total_bytes),
         fill: true,
         label: "MEMORY_BANK",
         pointRadius: 0,
@@ -587,18 +604,61 @@ export default function App() {
     );
   }
 
+  const primaryMonitorAction =
+    dashboard.status === "running"
+      ? { label: "Pause Monitoring", nextMode: "paused" as const }
+      : { label: "Start Monitoring", nextMode: "running" as const };
+
   return (
     <main className="matrix-shell mx-auto flex min-h-screen max-w-6xl flex-col gap-5 px-4 py-4 lg:px-6">
       <MatrixBackdrop />
       <section className="glass-panel overflow-hidden p-4 lg:p-5">
-        <div className="grid gap-4 lg:grid-cols-[1.5fr,0.95fr]">
+        <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
+          <div className="flex flex-wrap gap-2">
+            <button
+              className={`control-chip ${
+                dashboard.status === "running"
+                  ? "border-lime-300/40 bg-lime-500/18 text-lime-50"
+                  : ""
+              }`}
+              disabled={busyAction !== null}
+              onClick={() => void applyMonitorMode(primaryMonitorAction.nextMode)}
+              type="button"
+            >
+              {primaryMonitorAction.label}
+            </button>
+            <button
+              className="control-chip"
+              disabled={busyAction !== null}
+              onClick={() => void applyMonitorMode("stopped")}
+              type="button"
+            >
+              Stop
+            </button>
+            <button
+              className="control-chip"
+              disabled={busyAction !== null}
+              onClick={() => void handleExport("csv")}
+              type="button"
+            >
+              Export CSV
+            </button>
+            <button
+              className="control-chip"
+              disabled={busyAction !== null}
+              onClick={() => void handleExport("json")}
+              type="button"
+            >
+              Export JSON
+            </button>
+          </div>
+          <StatusBadge status={dashboard.status} />
+        </div>
+
+        <div className="grid gap-4">
           <div>
             <div className="hero-kicker text-[11px] uppercase tracking-[0.32em]" style={{ color: "var(--text-secondary)" }}>
               Zion Node 01 / Live Monitor
-            </div>
-            <div className="mt-2 flex flex-wrap items-center gap-3">
-              <h1 className="hero-title text-3xl font-semibold tracking-tight lg:text-4xl">PulseGuard</h1>
-              <StatusBadge status={dashboard.status} />
             </div>
             <div className="hero-readout mt-3 grid gap-2 sm:grid-cols-3">
               <div className="soft-panel px-3 py-2">
@@ -626,67 +686,32 @@ export default function App() {
                 </div>
               </div>
             </div>
-            <div className="mt-3 flex flex-wrap gap-2">
-              <button
-                className="control-chip"
-                disabled={busyAction !== null}
-                onClick={() => void applyMonitorMode("running")}
-                type="button"
-              >
-                Start Monitoring
-              </button>
-              <button
-                className="control-chip"
-                disabled={busyAction !== null}
-                onClick={() => void applyMonitorMode("paused")}
-                type="button"
-              >
-                Pause
-              </button>
-              <button
-                className="control-chip"
-                disabled={busyAction !== null}
-                onClick={() => void applyMonitorMode("stopped")}
-                type="button"
-              >
-                Stop
-              </button>
-              <button
-                className="control-chip"
-                disabled={busyAction !== null}
-                onClick={() => void handleExport("csv")}
-                type="button"
-              >
-                Export CSV
-              </button>
-              <button
-                className="control-chip"
-                disabled={busyAction !== null}
-                onClick={() => void handleExport("json")}
-                type="button"
-              >
-                Export JSON
-              </button>
-            </div>
-          </div>
-
-          <div className="soft-panel flex flex-col gap-3 p-4">
-            <div className="flex items-center justify-between gap-3">
-              <span className="text-[11px] uppercase tracking-[0.28em]" style={{ color: "var(--text-muted)" }}>
-                Signal Matrix
-              </span>
-              <span className="font-mono text-[11px]" style={{ color: "var(--text-secondary)" }}>
-                archive://pulseguard.db
-              </span>
-            </div>
-            <div className="grid gap-3 sm:grid-cols-2">
-              <MetricCard label="Process Count" value={String(dashboard.snapshot.totals.process_count)} />
-              <MetricCard label="CPU Load" value={formatPercent(dashboard.snapshot.totals.cpu_total)} />
-              <MetricCard label="Memory Bank" value={formatPercent(dashboard.snapshot.totals.mem_total)} />
-              <MetricCard
-                label="Net Flux"
-                value={`${formatCompactBytes(dashboard.snapshot.totals.net_recv_total)}↓ / ${formatCompactBytes(dashboard.snapshot.totals.net_sent_total)}↑`}
-              />
+            <div className="soft-panel mt-3 p-4">
+              <div className="mb-3 flex items-center justify-between gap-3">
+                <span className="font-mono text-[11px]" style={{ color: "var(--text-secondary)" }}>
+                  archive://pulseguard.db
+                </span>
+                <span className="text-[11px] uppercase tracking-[0.28em]" style={{ color: "var(--text-muted)" }}>
+                  Signal Matrix
+                </span>
+              </div>
+              <div className="grid gap-3 lg:grid-cols-4">
+                <MetricCard label="Process Count" value={String(dashboard.snapshot.totals.process_count)} />
+                <MetricCard label="CPU Load" value={formatPercent(dashboard.snapshot.totals.cpu_total)} />
+                <MetricCard
+                  label="Memory Bank"
+                  value={formatGigabytes(dashboard.snapshot.totals.mem_total_bytes)}
+                  detail={
+                    dashboard.snapshot.totals.memory_capacity_bytes > 0
+                      ? `${formatGigabytes(dashboard.snapshot.totals.memory_capacity_bytes)} max`
+                      : undefined
+                  }
+                />
+                <MetricCard
+                  label="Net Flux"
+                  value={`${formatCompactBytes(dashboard.snapshot.totals.net_recv_total)}↓ / ${formatCompactBytes(dashboard.snapshot.totals.net_sent_total)}↑`}
+                />
+              </div>
             </div>
           </div>
         </div>
@@ -754,7 +779,7 @@ export default function App() {
               </div>
               <div className="soft-panel chart-shell h-56 min-w-0 overflow-hidden p-3">
                 <div className="h-full min-w-0">
-                  <Line data={memoryHistory} options={buildChartOptions("Memory %", "percent")} />
+                  <Line data={memoryHistory} options={buildChartOptions("Memory GB", "gigabytes")} />
                 </div>
               </div>
             </div>
@@ -890,7 +915,7 @@ export default function App() {
                   {[
                     ["name", "Process"],
                     ["cpu_percent", "CPU"],
-                    ["mem_percent", "Memory"],
+                    ["mem_bytes", "Memory"],
                     ["disk_read_bytes", "Disk Read"],
                     ["disk_write_bytes", "Disk Write"],
                     ["net_recv_bytes", "Net Recv"],
@@ -919,7 +944,7 @@ export default function App() {
                       </div>
                     </td>
                     <td className="px-3 py-2.5 font-mono">{formatPercent(row.cpu_percent)}</td>
-                    <td className="px-3 py-2.5 font-mono">{formatPercent(row.mem_percent)}</td>
+                    <td className="px-3 py-2.5 font-mono">{formatGigabytes(row.mem_bytes)}</td>
                     <td className="px-3 py-2.5 font-mono">{formatBytes(row.disk_read_bytes)}</td>
                     <td className="px-3 py-2.5 font-mono">{formatBytes(row.disk_write_bytes)}</td>
                     <td className="px-3 py-2.5 font-mono">{formatCompactBytes(row.net_recv_bytes)}</td>

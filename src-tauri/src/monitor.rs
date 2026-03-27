@@ -20,6 +20,7 @@ use crate::models::{
 const SAMPLE_EVENT: &str = "monitor://sample";
 const STATUS_EVENT: &str = "monitor://status";
 const TRAY_ID: &str = "pulseguard-tray";
+const BYTES_PER_GIB: f64 = 1024.0 * 1024.0 * 1024.0;
 
 #[derive(Clone)]
 pub struct MonitorController {
@@ -176,8 +177,13 @@ fn monitor_loop(inner: Arc<MonitorInner>) {
             .expect("settings lock poisoned")
             .retention_days;
 
-        if let Err(error) = db::insert_samples(&inner.db_path, &snapshot.processes, retention_days)
-        {
+        if let Err(error) = db::insert_samples(
+            &inner.db_path,
+            &snapshot.processes,
+            snapshot.totals.mem_total_bytes,
+            snapshot.totals.memory_capacity_bytes,
+            retention_days,
+        ) {
             eprintln!("pulseguard: failed to persist process samples: {error}");
         }
 
@@ -212,9 +218,14 @@ fn collect_snapshot(
 
     let timestamp = Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true);
     let total_memory = system.total_memory().max(1);
+    let used_memory = system.used_memory();
     let mut active_network = HashMap::new();
     let mut processes = Vec::new();
-    let mut totals = SampleTotals::default();
+    let mut totals = SampleTotals {
+        mem_total_bytes: used_memory,
+        memory_capacity_bytes: total_memory,
+        ..SampleTotals::default()
+    };
 
     for (pid, process) in system.processes() {
         let pid_value = pid_to_i64(*pid);
@@ -235,25 +246,24 @@ fn collect_snapshot(
         active_network.insert(pid_value, network);
 
         let cpu_percent = round_metric(process.cpu_usage() as f64);
-        let mem_percent = round_metric((process.memory() as f64 / total_memory as f64) * 100.0);
+        let mem_bytes = process.memory();
         let sample = ProcessSample {
             timestamp: timestamp.clone(),
             pid: pid_value,
             name,
             cpu_percent,
-            mem_percent,
+            mem_bytes,
             disk_read_bytes: disk.read_bytes,
             disk_write_bytes: disk.written_bytes,
             net_recv_bytes: recv_delta,
             net_sent_bytes: sent_delta,
         };
 
-        if !should_store_sample(&sample) {
+        if !should_store_sample(&sample, total_memory) {
             continue;
         }
 
         totals.cpu_total += sample.cpu_percent;
-        totals.mem_total += sample.mem_percent;
         totals.disk_read_total += sample.disk_read_bytes;
         totals.disk_write_total += sample.disk_write_bytes;
         totals.net_recv_total += sample.net_recv_bytes;
@@ -262,7 +272,6 @@ fn collect_snapshot(
     }
 
     totals.cpu_total = round_metric(totals.cpu_total);
-    totals.mem_total = round_metric(totals.mem_total);
     totals.process_count = processes.len();
     processes.sort_by(compare_samples);
 
@@ -275,9 +284,9 @@ fn collect_snapshot(
     }
 }
 
-fn should_store_sample(sample: &ProcessSample) -> bool {
+fn should_store_sample(sample: &ProcessSample, total_memory: u64) -> bool {
     sample.cpu_percent >= 0.1
-        || sample.mem_percent >= 0.1
+        || sample.mem_bytes as f64 / total_memory as f64 >= 0.001
         || sample.disk_read_bytes > 0
         || sample.disk_write_bytes > 0
         || sample.net_recv_bytes > 0
@@ -293,7 +302,7 @@ fn compare_samples(left: &ProcessSample, right: &ProcessSample) -> Ordering {
 
 fn sample_score(sample: &ProcessSample) -> f64 {
     sample.cpu_percent * 6.0
-        + sample.mem_percent * 2.5
+        + (sample.mem_bytes as f64 / BYTES_PER_GIB) * 2.5
         + (sample.disk_read_bytes + sample.disk_write_bytes) as f64 / 1024.0
         + (sample.net_recv_bytes + sample.net_sent_bytes) as f64 / 1024.0
 }
@@ -354,9 +363,10 @@ fn update_tray_tooltip(app: &AppHandle, mode: MonitorMode, snapshot: &DashboardS
         .map(short_timestamp)
         .unwrap_or_else(|| "waiting".into());
     let tooltip = format!(
-        "PulseGuard ({status})\nCPU: {:.1}% | Mem: {:.1}%\nNet: {} down / {} up\nLast sample: {timestamp}",
+        "PulseGuard ({status})\nCPU: {:.1}% | Mem: {} / {}\nNet: {} down / {} up\nLast sample: {timestamp}",
         snapshot.totals.cpu_total,
-        snapshot.totals.mem_total,
+        human_gigabytes(snapshot.totals.mem_total_bytes),
+        human_gigabytes(snapshot.totals.memory_capacity_bytes),
         human_bytes(snapshot.totals.net_recv_total),
         human_bytes(snapshot.totals.net_sent_total),
     );
@@ -382,4 +392,8 @@ fn human_bytes(value: u64) -> String {
     }
 
     format!("{current:.1} {}", units[unit_index])
+}
+
+fn human_gigabytes(value: u64) -> String {
+    format!("{:.1} GB", value as f64 / BYTES_PER_GIB)
 }

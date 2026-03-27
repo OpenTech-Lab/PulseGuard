@@ -19,6 +19,9 @@ pub fn init_db(db_path: &Path) -> AppResult<()> {
             name              TEXT NOT NULL,
             cpu_percent       REAL,
             mem_percent       REAL,
+            mem_bytes         INTEGER DEFAULT 0,
+            mem_used_bytes    INTEGER DEFAULT 0,
+            memory_capacity_bytes INTEGER DEFAULT 0,
             disk_read_bytes   INTEGER DEFAULT 0,
             disk_write_bytes  INTEGER DEFAULT 0,
             net_recv_bytes    INTEGER DEFAULT 0,
@@ -30,12 +33,27 @@ pub fn init_db(db_path: &Path) -> AppResult<()> {
         CREATE INDEX IF NOT EXISTS idx_pid ON process_stats(pid);
         "#,
     )?;
+    ensure_column(&connection, "process_stats", "mem_bytes", "INTEGER DEFAULT 0")?;
+    ensure_column(
+        &connection,
+        "process_stats",
+        "mem_used_bytes",
+        "INTEGER DEFAULT 0",
+    )?;
+    ensure_column(
+        &connection,
+        "process_stats",
+        "memory_capacity_bytes",
+        "INTEGER DEFAULT 0",
+    )?;
     Ok(())
 }
 
 pub fn insert_samples(
     db_path: &Path,
     samples: &[ProcessSample],
+    mem_used_bytes: u64,
+    memory_capacity_bytes: u64,
     retention_days: u32,
 ) -> AppResult<()> {
     let mut connection = Connection::open(db_path)?;
@@ -56,12 +74,15 @@ pub fn insert_samples(
                 name,
                 cpu_percent,
                 mem_percent,
+                mem_bytes,
+                mem_used_bytes,
+                memory_capacity_bytes,
                 disk_read_bytes,
                 disk_write_bytes,
                 net_recv_bytes,
                 net_sent_bytes
             )
-            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
             "#,
         )?;
 
@@ -71,7 +92,10 @@ pub fn insert_samples(
                 sample.pid,
                 sample.name,
                 sample.cpu_percent,
-                sample.mem_percent,
+                0.0_f64,
+                sample.mem_bytes,
+                mem_used_bytes,
+                memory_capacity_bytes,
                 sample.disk_read_bytes,
                 sample.disk_write_bytes,
                 sample.net_recv_bytes,
@@ -93,7 +117,7 @@ pub fn load_history(db_path: &Path, hours: u32) -> AppResult<Vec<HistoryPoint>> 
         SELECT
             timestamp,
             ROUND(COALESCE(SUM(cpu_percent), 0), 2) AS cpu_total,
-            ROUND(COALESCE(SUM(mem_percent), 0), 2) AS mem_total,
+            COALESCE(MAX(mem_used_bytes), 0) AS mem_total_bytes,
             COALESCE(SUM(disk_read_bytes), 0) AS disk_read_total,
             COALESCE(SUM(disk_write_bytes), 0) AS disk_write_total,
             COALESCE(SUM(net_recv_bytes), 0) AS net_recv_total,
@@ -110,7 +134,7 @@ pub fn load_history(db_path: &Path, hours: u32) -> AppResult<Vec<HistoryPoint>> 
         Ok(HistoryPoint {
             timestamp: row.get(0)?,
             cpu_total: row.get(1)?,
-            mem_total: row.get(2)?,
+            mem_total_bytes: row.get(2)?,
             disk_read_total: row.get(3)?,
             disk_write_total: row.get(4)?,
             net_recv_total: row.get(5)?,
@@ -139,17 +163,17 @@ pub fn export_samples(
     let (path, contents) = match format {
         ExportFormat::Csv => {
             let mut csv = String::from(
-                "timestamp,pid,name,cpu_percent,mem_percent,disk_read_bytes,disk_write_bytes,net_recv_bytes,net_sent_bytes\n",
+                "timestamp,pid,name,cpu_percent,mem_bytes,disk_read_bytes,disk_write_bytes,net_recv_bytes,net_sent_bytes\n",
             );
             for row in &rows {
                 let _ = writeln!(
                     csv,
-                    "{},{},{},{:.2},{:.2},{},{},{},{}",
+                    "{},{},{},{:.2},{},{},{},{},{}",
                     csv_escape(&row.timestamp),
                     row.pid,
                     csv_escape(&row.name),
                     row.cpu_percent,
-                    row.mem_percent,
+                    row.mem_bytes,
                     row.disk_read_bytes,
                     row.disk_write_bytes,
                     row.net_recv_bytes,
@@ -184,14 +208,14 @@ fn load_rows(db_path: &Path, hours: u32) -> AppResult<Vec<ProcessSample>> {
             pid,
             name,
             cpu_percent,
-            mem_percent,
+            mem_bytes,
             disk_read_bytes,
             disk_write_bytes,
             net_recv_bytes,
             net_sent_bytes
         FROM process_stats
         WHERE timestamp >= ?1
-        ORDER BY timestamp DESC, cpu_percent DESC, mem_percent DESC
+        ORDER BY timestamp DESC, cpu_percent DESC, mem_bytes DESC
         "#,
     )?;
 
@@ -201,7 +225,7 @@ fn load_rows(db_path: &Path, hours: u32) -> AppResult<Vec<ProcessSample>> {
             pid: row.get(1)?,
             name: row.get(2)?,
             cpu_percent: row.get(3)?,
-            mem_percent: row.get(4)?,
+            mem_bytes: row.get(4)?,
             disk_read_bytes: row.get(5)?,
             disk_write_bytes: row.get(6)?,
             net_recv_bytes: row.get(7)?,
@@ -222,4 +246,25 @@ fn csv_escape(value: &str) -> String {
     } else {
         value.to_owned()
     }
+}
+
+fn ensure_column(
+    connection: &Connection,
+    table: &str,
+    column: &str,
+    definition: &str,
+) -> AppResult<()> {
+    let mut statement = connection.prepare(&format!("PRAGMA table_info({table})"))?;
+    let columns = statement.query_map([], |row| row.get::<_, String>(1))?;
+    for existing in columns {
+        if existing? == column {
+            return Ok(());
+        }
+    }
+
+    connection.execute(
+        &format!("ALTER TABLE {table} ADD COLUMN {column} {definition}"),
+        [],
+    )?;
+    Ok(())
 }

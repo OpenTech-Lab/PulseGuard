@@ -16,9 +16,7 @@
   --accent: #6eff6e;
   --accent-strong: #ceff6e;
   --danger: #ff5b7f;
-  --matrix-edge:
-    0 0 0 1px rgba(111, 255, 145, 0.08),
-    inset 0 0 0 1px rgba(111, 255, 145, 0.04);
+  --matrix-edge: none;
   font-family: "IBM Plex Mono", "JetBrains Mono", "SFMono-Regular", "Consolas", monospace;
   background: #000000;
   color: var(--text-primary);
@@ -174,10 +172,8 @@ input {
   }
 
   .glass-panel {
-    @apply rounded-3xl border backdrop-blur-md;
+    @apply rounded-3xl backdrop-blur-md;
     background: rgba(0, 0, 0, 0.96);
-    border-color: var(--line-strong);
-    box-shadow: var(--matrix-edge);
     position: relative;
   }
 
@@ -192,11 +188,27 @@ input {
   }
 
   .soft-panel {
-    @apply rounded-2xl border;
+    @apply rounded-2xl;
     background: rgba(0, 0, 0, 0.94);
-    border-color: var(--line-soft);
-    box-shadow: inset 0 0 0 1px rgba(111, 255, 145, 0.04);
     position: relative;
+  }
+
+  .glass-panel::after,
+  .soft-panel::after {
+    content: "";
+    height: 1px;
+    left: 1rem;
+    pointer-events: none;
+    position: absolute;
+    right: 1rem;
+    top: 0;
+    background: linear-gradient(
+      90deg,
+      transparent 0%,
+      rgba(111, 255, 145, 0.18) 18%,
+      rgba(111, 255, 145, 0.18) 82%,
+      transparent 100%
+    );
   }
 
   .matrix-card {
@@ -271,7 +283,6 @@ input {
     background: #000000;
     border-color: rgba(111, 255, 145, 0.12);
     color: var(--text-secondary);
-    box-shadow: inset 0 0 0 1px rgba(111, 255, 145, 0.04);
   }
 
   .tab-button:hover {
@@ -295,7 +306,6 @@ input {
   }
 
   .chart-shell {
-    box-shadow: inset 0 0 0 1px rgba(110, 255, 110, 0.05);
     min-width: 0;
     overflow: hidden;
   }

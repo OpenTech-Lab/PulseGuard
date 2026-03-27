@@ -6,7 +6,7 @@ export interface ProcessSample {
   pid: number;
   name: string;
   cpu_percent: number;
-  mem_percent: number;
+  mem_bytes: number;
   disk_read_bytes: number;
   disk_write_bytes: number;
   net_recv_bytes: number;
@@ -15,7 +15,8 @@ export interface ProcessSample {
 
 export interface SampleTotals {
   cpu_total: number;
-  mem_total: number;
+  mem_total_bytes: number;
+  memory_capacity_bytes: number;
   disk_read_total: number;
   disk_write_total: number;
   net_recv_total: number;
@@ -32,7 +33,7 @@ export interface DashboardSnapshot {
 export interface HistoryPoint {
   timestamp: string;
   cpu_total: number;
-  mem_total: number;
+  mem_total_bytes: number;
   disk_read_total: number;
   disk_write_total: number;
   net_recv_total: number;
