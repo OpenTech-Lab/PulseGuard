@@ -21,7 +21,9 @@
         "height": 960,
         "minWidth": 590,
         "minHeight": 380,
-        "resizable": true
+        "resizable": true,
+        "decorations": false,
+        "backgroundColor": "#000000"
       }
     ]
   },

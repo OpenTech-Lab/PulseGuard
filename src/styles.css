@@ -25,6 +25,7 @@
 html,
 body,
 #root {
+  height: 100%;
   min-height: 100%;
 }
 
@@ -175,6 +176,84 @@ input {
     @apply rounded-3xl backdrop-blur-md;
     background: rgba(0, 0, 0, 0.96);
     position: relative;
+  }
+
+  .window-chrome {
+    align-items: stretch;
+    background: rgba(0, 0, 0, 0.98);
+    display: flex;
+    min-height: 1.875rem;
+    overflow: hidden;
+    padding: 0;
+    position: sticky;
+    top: 0;
+    z-index: 40;
+  }
+
+  .window-drag-area {
+    align-items: center;
+    cursor: grab;
+    display: flex;
+    flex: 1;
+    gap: 0.65rem;
+    min-width: 0;
+    padding: 0 0.8rem;
+    user-select: none;
+  }
+
+  .window-drag-area:active {
+    cursor: grabbing;
+  }
+
+  .window-title {
+    color: var(--text-primary);
+    font-size: 0.72rem;
+    font-weight: 700;
+    letter-spacing: 0.22em;
+    text-transform: uppercase;
+  }
+
+  .window-subtitle {
+    color: var(--text-muted);
+    font-size: 0.64rem;
+    letter-spacing: 0.16em;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    text-transform: uppercase;
+    white-space: nowrap;
+  }
+
+  .window-actions {
+    display: flex;
+    flex-shrink: 0;
+  }
+
+  .window-action {
+    align-items: center;
+    background: #000000;
+    border: 0;
+    border-left: 1px solid rgba(111, 255, 145, 0.1);
+    color: var(--text-primary);
+    cursor: pointer;
+    display: inline-flex;
+    font-size: 0.8rem;
+    font-weight: 700;
+    justify-content: center;
+    min-width: 2.4rem;
+    padding: 0;
+    transition:
+      background-color 140ms ease,
+      color 140ms ease;
+  }
+
+  .window-action:hover {
+    background: rgba(18, 48, 22, 0.92);
+    color: #f6fff8;
+  }
+
+  .window-action-close:hover {
+    background: rgba(95, 12, 23, 0.96);
+    color: #fff1f4;
   }
 
   .glass-panel::before,

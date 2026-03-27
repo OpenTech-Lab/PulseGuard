@@ -11,6 +11,7 @@ import {
 } from "chart.js";
 import type { ChartOptions } from "chart.js";
 import { listen } from "@tauri-apps/api/event";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { startTransition, useDeferredValue, useEffect, useEffectEvent, useState } from "react";
 import type { CSSProperties } from "react";
 import { Line } from "react-chartjs-2";
@@ -36,6 +37,8 @@ ChartJS.register(
   PointElement,
   Tooltip,
 );
+
+const appWindow = getCurrentWindow();
 
 const numberFormat = new Intl.NumberFormat("en-US", {
   maximumFractionDigits: 1,
@@ -248,6 +251,58 @@ function buildChartOptions(
       },
     },
   };
+}
+
+function WindowChrome() {
+  return (
+    <header className="window-chrome glass-panel">
+      <div
+        className="window-drag-area"
+        onMouseDown={(event) => {
+          if (event.button !== 0) {
+            return;
+          }
+
+          void appWindow.startDragging();
+        }}
+      >
+        <div className="window-title">PulseGuard</div>
+        <div className="window-subtitle">Monitor Console</div>
+      </div>
+      <div className="window-actions">
+        <button
+          aria-label="Minimize window"
+          className="window-action"
+          onClick={() => {
+            void appWindow.minimize();
+          }}
+          type="button"
+        >
+          <span aria-hidden="true">_</span>
+        </button>
+        <button
+          aria-label="Toggle maximize window"
+          className="window-action"
+          onClick={() => {
+            void appWindow.toggleMaximize();
+          }}
+          type="button"
+        >
+          <span aria-hidden="true">[]</span>
+        </button>
+        <button
+          aria-label="Close window"
+          className="window-action window-action-close"
+          onClick={() => {
+            void appWindow.close();
+          }}
+          type="button"
+        >
+          <span aria-hidden="true">X</span>
+        </button>
+      </div>
+    </header>
+  );
 }
 
 function StatusBadge({ status }: { status: MonitorMode }) {
@@ -666,8 +721,10 @@ export default function App() {
   );
 
   return (
-    <main className="matrix-shell mx-auto flex min-h-screen max-w-6xl flex-col gap-5 px-4 py-4 lg:px-6">
+    <main className="matrix-shell mx-auto flex min-h-screen max-w-6xl flex-col  ">
       <MatrixBackdrop />
+      <WindowChrome />
+      <div className="px-4 lg:px-6">
       <section className="glass-panel overflow-hidden p-4 lg:p-5">
         <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
           <div className="flex flex-wrap gap-2">
@@ -1021,6 +1078,7 @@ export default function App() {
           </div>
         </section>
       ) : null}
+      </div>
     </main>
   );
 }
