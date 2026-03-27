@@ -160,12 +160,17 @@ fn build_tray(app: &mut tauri::App, monitor: MonitorController) -> tauri::Result
         .build()?;
 
     let menu_monitor = monitor.clone();
-    TrayIconBuilder::with_id("pulseguard-tray")
-        .icon(
-            app.default_window_icon()
-                .expect("missing default application icon")
-                .clone(),
-        )
+    #[cfg(target_os = "linux")]
+    let tray_builder = TrayIconBuilder::with_id("pulseguard-tray");
+
+    #[cfg(not(target_os = "linux"))]
+    let tray_builder = TrayIconBuilder::with_id("pulseguard-tray").icon(
+        app.default_window_icon()
+            .expect("missing default application icon")
+            .clone(),
+    );
+
+    tray_builder
         .menu(&menu)
         .show_menu_on_left_click(false)
         .on_menu_event(move |app, event| match event.id().as_ref() {

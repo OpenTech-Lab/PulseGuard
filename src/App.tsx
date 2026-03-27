@@ -12,6 +12,7 @@ import {
 import type { ChartOptions } from "chart.js";
 import { listen } from "@tauri-apps/api/event";
 import { startTransition, useDeferredValue, useEffect, useState } from "react";
+import type { CSSProperties } from "react";
 import { Line } from "react-chartjs-2";
 import { exportSamples, getDashboard, getHistory, setMonitorMode, updateSettings } from "./lib/api";
 import type {
@@ -51,6 +52,22 @@ type SortKey =
   | "net_recv_bytes"
   | "net_sent_bytes";
 
+type TabKey = "activity" | "settings" | "processes";
+const matrixGlyphs = [
+  "10100101",
+  "SYS",
+  "TRACE",
+  "KERNEL",
+  "IO",
+  "NET",
+  "MEM",
+  "PID",
+  "STACK",
+  "0x7f",
+  "LOCK",
+  "WAKE",
+];
+
 function formatPercent(value: number) {
   return `${numberFormat.format(value)}%`;
 }
@@ -66,6 +83,20 @@ function formatBytes(value: number) {
   return `${numberFormat.format(remainder)} ${units[unitIndex]}`;
 }
 
+function formatCompactBytes(value: number) {
+  const units = ["B", "K", "M", "G", "T"];
+  let remainder = value;
+  let unitIndex = 0;
+
+  while (remainder >= 1024 && unitIndex < units.length - 1) {
+    remainder /= 1024;
+    unitIndex += 1;
+  }
+
+  const digits = remainder >= 100 || unitIndex === 0 ? 0 : 1;
+  return `${remainder.toFixed(digits)}${units[unitIndex]}`;
+}
+
 function formatTimestamp(value: string | null) {
   if (!value) {
     return "Waiting for first sample";
@@ -75,7 +106,14 @@ function formatTimestamp(value: string | null) {
   return timestamp.toLocaleString();
 }
 
-function buildChartOptions(label: string): ChartOptions<"line"> {
+function buildRainColumn(index: number) {
+  return Array.from({ length: 18 }, (_, line) => matrixGlyphs[(index * 2 + line) % matrixGlyphs.length]).join("\n");
+}
+
+function buildChartOptions(
+  label: string,
+  valueMode: "bytes" | "percent" = "percent",
+): ChartOptions<"line"> {
   return {
     animation: false,
     maintainAspectRatio: false,
@@ -83,32 +121,71 @@ function buildChartOptions(label: string): ChartOptions<"line"> {
       legend: {
         display: true,
         labels: {
+          color: "#8dff9c",
+          font: {
+            family: "IBM Plex Mono, JetBrains Mono, monospace",
+            size: 11,
+          },
           usePointStyle: true,
           boxWidth: 10,
         },
       },
       tooltip: {
+        backgroundColor: "rgba(5, 17, 8, 0.96)",
+        bodyColor: "#c8ffd2",
+        borderColor: "rgba(110, 255, 110, 0.28)",
+        borderWidth: 1,
+        callbacks: {
+          label: (context) => {
+            const value = Number(context.parsed.y ?? 0);
+            const formatted =
+              valueMode === "bytes" ? formatCompactBytes(value) : formatPercent(value);
+            return `${context.dataset.label}: ${formatted}`;
+          },
+        },
         mode: "index" as const,
         intersect: false,
+        titleColor: "#effff2",
       },
     },
     responsive: true,
     scales: {
       x: {
         grid: {
-          color: "rgba(127, 216, 173, 0.08)",
+          color: "rgba(85, 255, 122, 0.08)",
         },
         ticks: {
+          callback: (value) =>
+            valueMode === "bytes"
+              ? formatCompactBytes(Number(value))
+              : formatPercent(Number(value)),
+          color: "rgba(150, 255, 170, 0.56)",
+          font: {
+            family: "IBM Plex Mono, JetBrains Mono, monospace",
+            size: 10,
+          },
           maxRotation: 0,
         },
       },
       y: {
         beginAtZero: true,
         grid: {
-          color: "rgba(127, 216, 173, 0.08)",
+          color: "rgba(85, 255, 122, 0.08)",
+        },
+        ticks: {
+          color: "rgba(150, 255, 170, 0.56)",
+          font: {
+            family: "IBM Plex Mono, JetBrains Mono, monospace",
+            size: 10,
+          },
         },
         title: {
+          color: "rgba(209, 255, 220, 0.84)",
           display: true,
+          font: {
+            family: "IBM Plex Mono, JetBrains Mono, monospace",
+            size: 11,
+          },
           text: label,
         },
       },
@@ -119,28 +196,28 @@ function buildChartOptions(label: string): ChartOptions<"line"> {
 function StatusBadge({ status }: { status: MonitorMode }) {
   const config = {
     paused: {
-      dot: "bg-amber-400",
+      dot: "bg-amber-300",
       label: "Paused",
-      tone: "text-amber-600 dark:text-amber-300",
+      tone: "text-amber-200 border-amber-500/30",
     },
     running: {
-      dot: "bg-accent-500",
+      dot: "bg-lime-300",
       label: "Running",
-      tone: "text-accent-700 dark:text-accent-300",
+      tone: "text-lime-100 border-lime-400/30",
     },
     stopped: {
       dot: "bg-rose-400",
       label: "Stopped",
-      tone: "text-rose-600 dark:text-rose-300",
+      tone: "text-rose-200 border-rose-500/30",
     },
   }[status];
 
   return (
     <div
-      className={`inline-flex items-center gap-3 rounded-full border px-4 py-2 text-sm font-semibold ${config.tone}`}
-      style={{ borderColor: "var(--line-soft)", background: "var(--bg-soft)" }}
+      className={`inline-flex items-center gap-3 rounded-md border px-4 py-2 text-xs font-semibold uppercase tracking-[0.28em] ${config.tone}`}
+      style={{ background: "rgba(6, 18, 10, 0.9)", boxShadow: "var(--matrix-edge)" }}
     >
-      <span className={`h-2.5 w-2.5 rounded-full ${config.dot}`} />
+      <span className={`h-2 w-2 rounded-full ${config.dot} shadow-[0_0_12px_currentColor]`} />
       {config.label}
     </div>
   );
@@ -153,18 +230,48 @@ function MetricCard({
 }: {
   label: string;
   value: string;
-  detail: string;
+  detail?: string;
 }) {
   return (
-    <div className="soft-panel animate-pulse-enter p-5">
-      <div className="text-sm uppercase tracking-[0.18em]" style={{ color: "var(--text-secondary)" }}>
+    <div className="soft-panel animate-pulse-enter matrix-card p-4">
+      <div className="text-[11px] uppercase tracking-[0.3em]" style={{ color: "var(--text-muted)" }}>
         {label}
       </div>
-      <div className="mt-3 text-3xl font-semibold" style={{ color: "var(--text-primary)" }}>
+      <div className="mt-2 font-mono text-2xl font-semibold" style={{ color: "var(--text-primary)" }}>
         {value}
       </div>
-      <div className="mt-2 text-sm" style={{ color: "var(--text-secondary)" }}>
-        {detail}
+      {detail ? (
+        <div className="mt-1 text-[11px] uppercase tracking-[0.18em]" style={{ color: "var(--text-secondary)" }}>
+          {detail}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function MatrixBackdrop() {
+  return (
+    <div aria-hidden="true" className="matrix-backdrop">
+      <div className="matrix-noise" />
+      <div className="matrix-grid-lines" />
+      <div className="matrix-glow matrix-glow-left" />
+      <div className="matrix-glow matrix-glow-right" />
+      <div className="matrix-rain">
+        {Array.from({ length: 14 }, (_, index) => (
+          <span
+            key={index}
+            className="rain-column"
+            style={
+              {
+                animationDelay: `-${index * 1.2}s`,
+                animationDuration: `${14 + (index % 4) * 2}s`,
+                left: `${index * 7.4}%`,
+              } as CSSProperties
+            }
+          >
+            {buildRainColumn(index)}
+          </span>
+        ))}
       </div>
     </div>
   );
@@ -181,6 +288,7 @@ export default function App() {
   const [minCpu, setMinCpu] = useState(0);
   const [sortKey, setSortKey] = useState<SortKey>("cpu_percent");
   const [sortDirection, setSortDirection] = useState<"asc" | "desc">("desc");
+  const [activeTab, setActiveTab] = useState<TabKey>("activity");
   const deferredSearch = useDeferredValue(search);
 
   async function hydrate(rangeHours: number) {
@@ -356,12 +464,12 @@ export default function App() {
   const cpuHistory = {
     datasets: [
       {
-        backgroundColor: "rgba(30, 167, 104, 0.14)",
-        borderColor: "rgba(30, 167, 104, 0.95)",
+        backgroundColor: "rgba(80, 255, 118, 0.14)",
+        borderColor: "rgba(118, 255, 145, 0.96)",
         borderWidth: 2,
         data: (dashboard?.history ?? []).map((point) => point.cpu_total),
         fill: true,
-        label: "CPU",
+        label: "CPU_SIGNAL",
         pointRadius: 0,
         tension: 0.32,
       },
@@ -372,12 +480,12 @@ export default function App() {
   const memoryHistory = {
     datasets: [
       {
-        backgroundColor: "rgba(59, 130, 246, 0.14)",
-        borderColor: "rgba(59, 130, 246, 0.95)",
+        backgroundColor: "rgba(147, 255, 95, 0.1)",
+        borderColor: "rgba(189, 255, 112, 0.92)",
         borderWidth: 2,
         data: (dashboard?.history ?? []).map((point) => point.mem_total),
         fill: true,
-        label: "Memory",
+        label: "MEMORY_BANK",
         pointRadius: 0,
         tension: 0.32,
       },
@@ -388,22 +496,22 @@ export default function App() {
   const networkHistory = {
     datasets: [
       {
-        backgroundColor: "rgba(99, 102, 241, 0.14)",
-        borderColor: "rgba(99, 102, 241, 0.95)",
+        backgroundColor: "rgba(74, 255, 173, 0.08)",
+        borderColor: "rgba(103, 255, 179, 0.9)",
         borderWidth: 2,
         data: (dashboard?.history ?? []).map((point) => point.net_recv_total),
         fill: true,
-        label: "Receive",
+        label: "NET_RX",
         pointRadius: 0,
         tension: 0.32,
       },
       {
-        backgroundColor: "rgba(244, 114, 182, 0.10)",
-        borderColor: "rgba(244, 114, 182, 0.92)",
+        backgroundColor: "rgba(39, 192, 102, 0.07)",
+        borderColor: "rgba(73, 233, 137, 0.8)",
         borderWidth: 2,
         data: (dashboard?.history ?? []).map((point) => point.net_sent_total),
         fill: true,
-        label: "Send",
+        label: "NET_TX",
         pointRadius: 0,
         tension: 0.32,
       },
@@ -421,41 +529,80 @@ export default function App() {
     setSortDirection(nextKey === "name" ? "asc" : "desc");
   }
 
+  const tabs: Array<{ detail: string; key: TabKey; label: string }> = [
+    {
+      detail: "",
+      key: "activity",
+      label: "Signal Deck",
+    },
+    {
+      detail: "",
+      key: "settings",
+      label: "Control Deck",
+    },
+    {
+      detail: "",
+      key: "processes",
+      label: "Process Ledger",
+    },
+  ];
+
   if (!dashboard || !settingsDraft) {
     return (
-      <main className="mx-auto flex min-h-screen max-w-7xl items-center justify-center px-6 py-16">
-        <div className="glass-panel max-w-xl p-10 text-center">
-          <div className="text-sm uppercase tracking-[0.24em]" style={{ color: "var(--text-secondary)" }}>
-            PulseGuard
+      <main className="matrix-shell mx-auto flex min-h-screen max-w-6xl items-center justify-center px-4 py-12">
+        <MatrixBackdrop />
+        <div className="glass-panel max-w-lg p-8 text-center">
+          <div className="hero-kicker text-sm uppercase tracking-[0.3em]" style={{ color: "var(--text-secondary)" }}>
+            PulseGuard Console
           </div>
-          <h1 className="mt-3 text-4xl font-semibold">Preparing monitor workspace</h1>
-          <p className="mt-4 text-base" style={{ color: "var(--text-secondary)" }}>
-            Creating the dashboard, loading settings, and opening the local SQLite archive.
-          </p>
+          <h1 className="hero-title mt-3 text-3xl font-semibold">Bootstrapping deck</h1>
         </div>
       </main>
     );
   }
 
   return (
-    <main className="mx-auto flex min-h-screen max-w-7xl flex-col gap-8 px-5 py-6 lg:px-8">
-      <section className="glass-panel overflow-hidden p-6 lg:p-8">
-        <div className="grid gap-8 lg:grid-cols-[1.65fr,0.95fr]">
+    <main className="matrix-shell mx-auto flex min-h-screen max-w-6xl flex-col gap-5 px-4 py-4 lg:px-6">
+      <MatrixBackdrop />
+      <section className="glass-panel overflow-hidden p-4 lg:p-5">
+        <div className="grid gap-4 lg:grid-cols-[1.5fr,0.95fr]">
           <div>
-            <div className="text-sm uppercase tracking-[0.24em]" style={{ color: "var(--text-secondary)" }}>
-              Watch the pulse
+            <div className="hero-kicker text-[11px] uppercase tracking-[0.32em]" style={{ color: "var(--text-secondary)" }}>
+              Zion Node 01 / Live Monitor
             </div>
-            <div className="mt-4 flex flex-wrap items-center gap-4">
-              <h1 className="text-4xl font-semibold tracking-tight lg:text-5xl">PulseGuard</h1>
+            <div className="mt-2 flex flex-wrap items-center gap-3">
+              <h1 className="hero-title text-3xl font-semibold tracking-tight lg:text-4xl">PulseGuard</h1>
               <StatusBadge status={dashboard.status} />
             </div>
-            <p className="mt-4 max-w-3xl text-base leading-7" style={{ color: "var(--text-secondary)" }}>
-              Lightweight per-process system monitoring with Rust collection, SQLite retention, and a
-              native-feeling Tauri dashboard. Close the window if you want; the sampler can keep running.
-            </p>
-            <div className="mt-6 flex flex-wrap gap-3">
+            <div className="hero-readout mt-3 grid gap-2 sm:grid-cols-3">
+              <div className="soft-panel px-3 py-2">
+                <div className="text-[11px] uppercase tracking-[0.28em]" style={{ color: "var(--text-muted)" }}>
+                  Sync
+                </div>
+                <div className="mt-1 font-mono text-xs" style={{ color: "var(--text-primary)" }}>
+                  {formatTimestamp(dashboard.snapshot.timestamp)}
+                </div>
+              </div>
+              <div className="soft-panel px-3 py-2">
+                <div className="text-[11px] uppercase tracking-[0.28em]" style={{ color: "var(--text-muted)" }}>
+                  Step
+                </div>
+                <div className="mt-1 font-mono text-xs" style={{ color: "var(--text-primary)" }}>
+                  {settingsDraft.interval_secs}s interval
+                </div>
+              </div>
+              <div className="soft-panel px-3 py-2">
+                <div className="text-[11px] uppercase tracking-[0.28em]" style={{ color: "var(--text-muted)" }}>
+                  Retention
+                </div>
+                <div className="mt-1 font-mono text-xs" style={{ color: "var(--text-primary)" }}>
+                  {settingsDraft.retention_days} day archive
+                </div>
+              </div>
+            </div>
+            <div className="mt-3 flex flex-wrap gap-2">
               <button
-                className="control-chip border-transparent bg-accent-500/90 text-white hover:bg-accent-600"
+                className="control-chip"
                 disabled={busyAction !== null}
                 onClick={() => void applyMonitorMode("running")}
                 type="button"
@@ -497,35 +644,22 @@ export default function App() {
             </div>
           </div>
 
-          <div className="soft-panel flex flex-col gap-4 p-5">
-            <div className="flex items-center justify-between gap-4">
-              <span className="text-sm uppercase tracking-[0.18em]" style={{ color: "var(--text-secondary)" }}>
-                Current status
+          <div className="soft-panel flex flex-col gap-3 p-4">
+            <div className="flex items-center justify-between gap-3">
+              <span className="text-[11px] uppercase tracking-[0.28em]" style={{ color: "var(--text-muted)" }}>
+                Signal Matrix
               </span>
-              <span className="text-sm font-medium" style={{ color: "var(--text-secondary)" }}>
-                {formatTimestamp(dashboard.snapshot.timestamp)}
+              <span className="font-mono text-[11px]" style={{ color: "var(--text-secondary)" }}>
+                archive://pulseguard.db
               </span>
             </div>
-            <div className="grid gap-4 sm:grid-cols-2">
+            <div className="grid gap-3 sm:grid-cols-2">
+              <MetricCard label="Process Count" value={String(dashboard.snapshot.totals.process_count)} />
+              <MetricCard label="CPU Load" value={formatPercent(dashboard.snapshot.totals.cpu_total)} />
+              <MetricCard label="Memory Bank" value={formatPercent(dashboard.snapshot.totals.mem_total)} />
               <MetricCard
-                detail="Active processes in the latest sample"
-                label="Processes"
-                value={String(dashboard.snapshot.totals.process_count)}
-              />
-              <MetricCard
-                detail="Aggregated CPU across collected rows"
-                label="CPU"
-                value={formatPercent(dashboard.snapshot.totals.cpu_total)}
-              />
-              <MetricCard
-                detail="Resident memory share"
-                label="Memory"
-                value={formatPercent(dashboard.snapshot.totals.mem_total)}
-              />
-              <MetricCard
-                detail="Per-sample internet delta"
-                label="Network"
-                value={`${formatBytes(dashboard.snapshot.totals.net_recv_total)} ↓ / ${formatBytes(dashboard.snapshot.totals.net_sent_total)} ↑`}
+                label="Net Flux"
+                value={`${formatCompactBytes(dashboard.snapshot.totals.net_recv_total)}↓ / ${formatCompactBytes(dashboard.snapshot.totals.net_sent_total)}↑`}
               />
             </div>
           </div>
@@ -533,25 +667,44 @@ export default function App() {
       </section>
 
       {error ? (
-        <section className="glass-panel border-rose-300/40 p-4 text-sm text-rose-700 dark:text-rose-200">
+        <section className="glass-panel message-panel border-rose-300/40 p-3 text-xs text-rose-200">
+          <span className="message-tag">Alert</span>
           {error}
         </section>
       ) : null}
 
       {message ? (
-        <section className="glass-panel border-accent-300/40 p-4 text-sm text-accent-700 dark:text-accent-200">
+        <section className="glass-panel message-panel p-3 text-xs text-lime-100">
+          <span className="message-tag">System</span>
           {message}
         </section>
       ) : null}
 
-      <section className="grid gap-6 xl:grid-cols-[1.45fr,0.85fr]">
-        <div className="glass-panel p-5 lg:p-6">
-          <div className="flex flex-wrap items-center justify-between gap-3">
+      <section className="glass-panel p-2">
+        <div className="grid gap-2 md:grid-cols-3">
+          {tabs.map((tab) => {
+            const selected = activeTab === tab.key;
+            return (
+              <button
+                key={tab.key}
+                aria-pressed={selected}
+                className="tab-button"
+                data-active={selected ? "true" : "false"}
+                onClick={() => setActiveTab(tab.key)}
+                type="button"
+              >
+                <div className="text-xs font-semibold uppercase tracking-[0.24em]">{tab.label}</div>
+              </button>
+            );
+          })}
+        </div>
+      </section>
+
+      {activeTab === "activity" ? (
+        <section className="glass-panel min-w-0 overflow-hidden p-4 lg:p-5">
+          <div className="flex flex-wrap items-center justify-between gap-2">
             <div>
-              <h2 className="text-2xl font-semibold">Activity curves</h2>
-              <p className="mt-1 text-sm" style={{ color: "var(--text-secondary)" }}>
-                Historical totals sampled from the local SQLite archive.
-              </p>
+              <h2 className="section-title text-xl font-semibold">Signal Deck</h2>
             </div>
             <div className="flex flex-wrap gap-2">
               {historyRangeOptions.map((option) => (
@@ -566,35 +719,34 @@ export default function App() {
               ))}
             </div>
           </div>
-          <div className="mt-6 grid gap-4 xl:grid-cols-3">
-            <div className="soft-panel h-72 p-4">
-              <div className="h-full">
-                <Line data={cpuHistory} options={buildChartOptions("CPU %")} />
+          <div className="mt-4 grid min-w-0 gap-3 xl:grid-cols-3">
+            <div className="soft-panel chart-shell h-60 min-w-0 overflow-hidden p-3">
+              <div className="h-full min-w-0">
+                <Line data={cpuHistory} options={buildChartOptions("CPU %", "percent")} />
               </div>
             </div>
-            <div className="soft-panel h-72 p-4">
-              <div className="h-full">
-                <Line data={memoryHistory} options={buildChartOptions("Memory %")} />
+            <div className="soft-panel chart-shell h-60 min-w-0 overflow-hidden p-3">
+              <div className="h-full min-w-0">
+                <Line data={memoryHistory} options={buildChartOptions("Memory %", "percent")} />
               </div>
             </div>
-            <div className="soft-panel h-72 p-4">
-              <div className="h-full">
-                <Line data={networkHistory} options={buildChartOptions("Bytes")} />
+            <div className="soft-panel chart-shell h-60 min-w-0 overflow-hidden p-3">
+              <div className="h-full min-w-0">
+                <Line data={networkHistory} options={buildChartOptions("Data", "bytes")} />
               </div>
             </div>
           </div>
-        </div>
+        </section>
+      ) : null}
 
-        <div className="glass-panel p-5 lg:p-6">
-          <div className="flex items-start justify-between gap-3">
+      {activeTab === "settings" ? (
+        <section className="glass-panel p-4 lg:p-5">
+          <div className="flex items-start justify-between gap-2">
             <div>
-              <h2 className="text-2xl font-semibold">Settings</h2>
-              <p className="mt-1 text-sm" style={{ color: "var(--text-secondary)" }}>
-                Changes are stored in the config directory and applied to the monitor loop.
-              </p>
+              <h2 className="section-title text-xl font-semibold">Control Deck</h2>
             </div>
             <button
-              className="control-chip border-transparent bg-accent-500/90 text-white hover:bg-accent-600"
+              className="control-chip"
               disabled={busyAction !== null}
               onClick={() => void saveSettings()}
               type="button"
@@ -602,7 +754,7 @@ export default function App() {
               Save
             </button>
           </div>
-          <div className="mt-6 grid gap-4">
+          <div className="mt-4 grid gap-3">
             <label className="grid gap-2 text-sm font-medium">
               Sampling interval (seconds)
               <input
@@ -641,11 +793,11 @@ export default function App() {
                 value={settingsDraft.retention_days}
               />
             </label>
-            <label className="soft-panel flex items-center justify-between gap-3 px-4 py-3 text-sm font-medium">
+            <label className="soft-panel flex items-center justify-between gap-3 px-3 py-2 text-sm font-medium">
               <span>Start monitoring on launch</span>
               <input
                 checked={settingsDraft.auto_start}
-                className="h-5 w-5 rounded border"
+                className="h-5 w-5 rounded border border-lime-500/40 bg-black/70"
                 onChange={(event) =>
                   setSettingsDraft((current) =>
                     current
@@ -659,97 +811,99 @@ export default function App() {
                 type="checkbox"
               />
             </label>
-            <div className="soft-panel p-4 text-sm" style={{ color: "var(--text-secondary)" }}>
-              <div className="font-semibold" style={{ color: "var(--text-primary)" }}>
+            <div className="soft-panel p-3 text-sm" style={{ color: "var(--text-secondary)" }}>
+              <div className="font-semibold uppercase tracking-[0.2em]" style={{ color: "var(--text-primary)" }}>
                 Export folder
               </div>
-              <div className="mt-1 break-all">{dashboard.export_dir}</div>
+              <div className="mt-2 break-all font-mono text-[11px]">{dashboard.export_dir}</div>
             </div>
           </div>
-        </div>
-      </section>
+        </section>
+      ) : null}
 
-      <section className="glass-panel p-5 lg:p-6">
-        <div className="flex flex-col gap-5 lg:flex-row lg:items-end lg:justify-between">
-          <div>
-            <h2 className="text-2xl font-semibold">Process table</h2>
-            <p className="mt-1 text-sm" style={{ color: "var(--text-secondary)" }}>
-              Search by name or PID, sort by any metric, and filter out low-signal CPU entries.
-            </p>
-          </div>
-          <div className="grid gap-3 sm:grid-cols-2 lg:w-[30rem]">
-            <input
-              className="field"
-              onChange={(event) => setSearch(event.target.value)}
-              placeholder="Search process name or PID"
-              type="search"
-              value={search}
-            />
-            <label className="grid gap-2 text-sm font-medium">
-              Min CPU %
+      {activeTab === "processes" ? (
+        <section className="glass-panel p-4 lg:p-5">
+          <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
+            <div>
+              <h2 className="section-title text-xl font-semibold">Process Ledger</h2>
+            </div>
+            <div className="grid gap-2 sm:grid-cols-2 lg:w-[26rem]">
               <input
                 className="field"
-                min={0}
-                onChange={(event) => setMinCpu(Number(event.target.value))}
-                step={0.1}
-                type="number"
-                value={minCpu}
+                onChange={(event) => setSearch(event.target.value)}
+                placeholder="Search process name or PID"
+                type="search"
+                value={search}
               />
-            </label>
-          </div>
-        </div>
-        <div className="mt-5 overflow-x-auto">
-          <table className="min-w-full border-separate border-spacing-y-2 text-left text-sm">
-            <thead>
-              <tr style={{ color: "var(--text-secondary)" }}>
-                {[
-                  ["name", "Process"],
-                  ["cpu_percent", "CPU"],
-                  ["mem_percent", "Memory"],
-                  ["disk_read_bytes", "Disk Read"],
-                  ["disk_write_bytes", "Disk Write"],
-                  ["net_recv_bytes", "Net Recv"],
-                  ["net_sent_bytes", "Net Sent"],
-                ].map(([key, label]) => (
-                  <th key={key} className="px-3 py-2 font-medium">
-                    <button
-                      className="flex items-center gap-2"
-                      onClick={() => toggleSort(key as SortKey)}
-                      type="button"
-                    >
-                      {label}
-                      {sortKey === key ? (sortDirection === "asc" ? "↑" : "↓") : ""}
-                    </button>
-                  </th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {filteredRows.map((row: ProcessSample) => (
-                <tr key={`${row.pid}-${row.timestamp}`} className="soft-panel">
-                  <td className="rounded-l-2xl px-3 py-3">
-                    <div className="font-semibold">{row.name}</div>
-                    <div className="text-xs" style={{ color: "var(--text-secondary)" }}>
-                      PID {row.pid}
-                    </div>
-                  </td>
-                  <td className="px-3 py-3">{formatPercent(row.cpu_percent)}</td>
-                  <td className="px-3 py-3">{formatPercent(row.mem_percent)}</td>
-                  <td className="px-3 py-3">{formatBytes(row.disk_read_bytes)}</td>
-                  <td className="px-3 py-3">{formatBytes(row.disk_write_bytes)}</td>
-                  <td className="px-3 py-3">{formatBytes(row.net_recv_bytes)}</td>
-                  <td className="rounded-r-2xl px-3 py-3">{formatBytes(row.net_sent_bytes)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-          {filteredRows.length === 0 ? (
-            <div className="soft-panel mt-4 px-4 py-6 text-center text-sm" style={{ color: "var(--text-secondary)" }}>
-              No processes matched the current filter.
+              <label className="grid gap-2 text-sm font-medium">
+                Min CPU %
+                <input
+                  className="field"
+                  min={0}
+                  onChange={(event) => setMinCpu(Number(event.target.value))}
+                  step={0.1}
+                  type="number"
+                  value={minCpu}
+                />
+              </label>
             </div>
-          ) : null}
-        </div>
-      </section>
+          </div>
+          <div className="mt-3 overflow-x-auto table-shell">
+            <table className="min-w-full border-separate border-spacing-y-2 text-left text-sm">
+              <thead>
+                <tr style={{ color: "var(--text-muted)" }}>
+                  {[
+                    ["name", "Process"],
+                    ["cpu_percent", "CPU"],
+                    ["mem_percent", "Memory"],
+                    ["disk_read_bytes", "Disk Read"],
+                    ["disk_write_bytes", "Disk Write"],
+                    ["net_recv_bytes", "Net Recv"],
+                    ["net_sent_bytes", "Net Sent"],
+                  ].map(([key, label]) => (
+                    <th key={key} className="px-3 py-2 font-medium">
+                      <button
+                        className="flex items-center gap-2 uppercase tracking-[0.18em]"
+                        onClick={() => toggleSort(key as SortKey)}
+                        type="button"
+                      >
+                        {label}
+                        {sortKey === key ? (sortDirection === "asc" ? "↑" : "↓") : ""}
+                      </button>
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {filteredRows.map((row: ProcessSample) => (
+                  <tr key={`${row.pid}-${row.timestamp}`} className="soft-panel process-row">
+                    <td className="rounded-l-2xl px-3 py-2.5">
+                      <div className="font-semibold uppercase tracking-[0.08em]">{row.name}</div>
+                      <div className="font-mono text-[11px]" style={{ color: "var(--text-muted)" }}>
+                        PID {row.pid}
+                      </div>
+                    </td>
+                    <td className="px-3 py-2.5 font-mono">{formatPercent(row.cpu_percent)}</td>
+                    <td className="px-3 py-2.5 font-mono">{formatPercent(row.mem_percent)}</td>
+                    <td className="px-3 py-2.5 font-mono">{formatBytes(row.disk_read_bytes)}</td>
+                    <td className="px-3 py-2.5 font-mono">{formatBytes(row.disk_write_bytes)}</td>
+                    <td className="px-3 py-2.5 font-mono">{formatCompactBytes(row.net_recv_bytes)}</td>
+                    <td className="rounded-r-2xl px-3 py-2.5 font-mono">{formatCompactBytes(row.net_sent_bytes)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            {filteredRows.length === 0 ? (
+              <div
+                className="soft-panel mt-4 px-4 py-6 text-center text-sm"
+                style={{ color: "var(--text-secondary)" }}
+              >
+                No processes matched the current filter.
+              </div>
+            ) : null}
+          </div>
+        </section>
+      ) : null}
     </main>
   );
 }

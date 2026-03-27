@@ -3,40 +3,25 @@
 @tailwind utilities;
 
 :root {
-  color-scheme: light dark;
-  --bg-primary: #f5f7f2;
-  --bg-secondary: rgba(255, 255, 255, 0.72);
-  --bg-soft: rgba(255, 255, 255, 0.55);
-  --line-soft: rgba(22, 68, 47, 0.16);
-  --text-primary: #16351f;
-  --text-secondary: #4f6657;
-  --accent: #1ea768;
-  --accent-soft: rgba(30, 167, 104, 0.12);
-  --danger: #d9485f;
-  font-family: "IBM Plex Sans", "Aptos", "Noto Sans", sans-serif;
-  background:
-    radial-gradient(circle at top left, rgba(30, 167, 104, 0.18), transparent 30%),
-    radial-gradient(circle at top right, rgba(23, 82, 56, 0.14), transparent 26%),
-    linear-gradient(180deg, #f8faf7 0%, #eef4ef 100%);
+  color-scheme: dark;
+  --bg-primary: #000000;
+  --bg-secondary: rgba(0, 0, 0, 0.96);
+  --bg-soft: rgba(0, 0, 0, 0.92);
+  --bg-elevated: rgba(0, 0, 0, 0.98);
+  --line-soft: rgba(111, 255, 145, 0.14);
+  --line-strong: rgba(111, 255, 145, 0.22);
+  --text-primary: #e9ffee;
+  --text-secondary: #8dff9c;
+  --text-muted: #4fa468;
+  --accent: #6eff6e;
+  --accent-strong: #ceff6e;
+  --danger: #ff5b7f;
+  --matrix-edge:
+    0 0 0 1px rgba(111, 255, 145, 0.08),
+    inset 0 0 0 1px rgba(111, 255, 145, 0.04);
+  font-family: "IBM Plex Mono", "JetBrains Mono", "SFMono-Regular", "Consolas", monospace;
+  background: #000000;
   color: var(--text-primary);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg-primary: #0d1711;
-    --bg-secondary: rgba(16, 26, 18, 0.78);
-    --bg-soft: rgba(15, 25, 17, 0.58);
-    --line-soft: rgba(213, 242, 221, 0.12);
-    --text-primary: #ebfff1;
-    --text-secondary: #9db3a6;
-    --accent: #4de0a0;
-    --accent-soft: rgba(77, 224, 160, 0.16);
-    --danger: #ff7f8f;
-    background:
-      radial-gradient(circle at top left, rgba(77, 224, 160, 0.17), transparent 28%),
-      radial-gradient(circle at top right, rgba(46, 170, 116, 0.12), transparent 22%),
-      linear-gradient(180deg, #0d1711 0%, #0f1a13 100%);
-  }
 }
 
 html,
@@ -48,57 +33,291 @@ body,
 body {
   margin: 0;
   min-height: 100vh;
-  background: inherit;
+  background: #000000;
+  overflow-x: hidden;
+}
+
+body::before,
+body::after {
+  content: "";
+  inset: 0;
+  pointer-events: none;
+  position: fixed;
+  z-index: 0;
+}
+
+body::before {
+  background:
+    repeating-linear-gradient(
+      180deg,
+      rgba(173, 255, 184, 0.016) 0,
+      rgba(173, 255, 184, 0.016) 1px,
+      transparent 1px,
+      transparent 3px
+    );
+  opacity: 0.14;
+}
+
+body::after {
+  background: none;
 }
 
 * {
   box-sizing: border-box;
 }
 
+button,
+input {
+  font: inherit;
+}
+
 ::selection {
-  background: rgba(30, 167, 104, 0.22);
+  background: rgba(110, 255, 110, 0.24);
+  color: #f4fff6;
+}
+
+@keyframes pulse-enter {
+  0% {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+
+  100% {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes matrix-fall {
+  0% {
+    transform: translateY(-16%);
+  }
+
+  100% {
+    transform: translateY(120%);
+  }
+}
+
+@keyframes crt-flicker {
+  0%,
+  100% {
+    opacity: 0.96;
+  }
+
+  50% {
+    opacity: 1;
+  }
 }
 
 @layer components {
+  .matrix-shell {
+    position: relative;
+    z-index: 1;
+  }
+
+  .matrix-backdrop {
+    inset: 0;
+    overflow: hidden;
+    pointer-events: none;
+    position: fixed;
+    z-index: -1;
+  }
+
+  .matrix-noise {
+    inset: 0;
+    opacity: 0.04;
+    position: absolute;
+    background: none;
+  }
+
+  .matrix-grid-lines {
+    inset: 0;
+    opacity: 0.18;
+    position: absolute;
+    background-image:
+      linear-gradient(rgba(111, 255, 145, 0.07) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(111, 255, 145, 0.06) 1px, transparent 1px);
+    background-size: 100% 64px, 64px 100%;
+  }
+
+  .matrix-glow {
+    display: none;
+  }
+
+  .matrix-glow-left {
+    display: none;
+  }
+
+  .matrix-glow-right {
+    display: none;
+  }
+
+  .matrix-rain {
+    inset: 0;
+    overflow: hidden;
+    position: absolute;
+  }
+
+  .rain-column {
+    animation-name: matrix-fall;
+    animation-timing-function: linear;
+    animation-iteration-count: infinite;
+    color: rgba(120, 255, 120, 0.1);
+    font-size: 0.72rem;
+    left: 0;
+    letter-spacing: 0.16em;
+    line-height: 1.35;
+    position: absolute;
+    top: -20%;
+    white-space: pre;
+    writing-mode: vertical-rl;
+  }
+
   .glass-panel {
-    @apply rounded-3xl border backdrop-blur-xl shadow-ambient;
-    background: var(--bg-secondary);
-    border-color: var(--line-soft);
+    @apply rounded-3xl border backdrop-blur-md;
+    background: rgba(0, 0, 0, 0.96);
+    border-color: var(--line-strong);
+    box-shadow: var(--matrix-edge);
+    position: relative;
+  }
+
+  .glass-panel::before,
+  .soft-panel::before {
+    content: "";
+    inset: 0;
+    pointer-events: none;
+    position: absolute;
+    border-radius: inherit;
+    background: none;
   }
 
   .soft-panel {
     @apply rounded-2xl border;
-    background: var(--bg-soft);
+    background: rgba(0, 0, 0, 0.94);
     border-color: var(--line-soft);
+    box-shadow: inset 0 0 0 1px rgba(111, 255, 145, 0.04);
+    position: relative;
+  }
+
+  .matrix-card {
+    min-height: 6.75rem;
   }
 
   .control-chip {
-    @apply rounded-full border px-4 py-2 text-sm font-medium transition;
-    border-color: var(--line-soft);
+    @apply rounded-md border px-3 py-1.5 text-[11px] font-semibold uppercase tracking-[0.24em] transition;
+    background: #000000;
+    border-color: var(--line-strong);
     color: var(--text-primary);
-    background: var(--bg-soft);
   }
 
   .control-chip:hover {
+    border-color: rgba(173, 255, 129, 0.44);
     transform: translateY(-1px);
-    background: var(--accent-soft);
+  }
+
+  .control-chip:disabled {
+    cursor: not-allowed;
+    opacity: 0.48;
+    transform: none;
   }
 
   .field {
-    @apply w-full rounded-2xl border px-4 py-3 text-sm outline-none transition;
-    border-color: var(--line-soft);
-    background: rgba(255, 255, 255, 0.5);
+    @apply w-full rounded-xl border px-3 py-2 text-sm outline-none transition;
+    background: #000000;
+    border-color: rgba(111, 255, 145, 0.18);
     color: var(--text-primary);
   }
 
-  @media (prefers-color-scheme: dark) {
-    .field {
-      background: rgba(13, 23, 17, 0.6);
-    }
+  .field::placeholder {
+    color: rgba(141, 255, 156, 0.34);
   }
 
   .field:focus {
-    border-color: rgba(30, 167, 104, 0.45);
-    box-shadow: 0 0 0 4px rgba(30, 167, 104, 0.12);
+    border-color: rgba(173, 255, 129, 0.54);
+    box-shadow: 0 0 0 2px rgba(84, 255, 106, 0.08);
+  }
+
+  .hero-kicker {
+    color: var(--text-muted);
+  }
+
+  .hero-title {
+    color: var(--text-primary);
+    letter-spacing: -0.04em;
+  }
+
+  .hero-copy {
+    max-width: 42rem;
+  }
+
+  .hero-readout .soft-panel {
+    min-height: 4.25rem;
+  }
+
+  .message-panel {
+    align-items: center;
+    display: flex;
+    gap: 1rem;
+  }
+
+  .message-tag {
+    @apply rounded-md border px-2.5 py-1.5 text-[10px] font-semibold uppercase tracking-[0.24em];
+    border-color: currentColor;
+    flex-shrink: 0;
+  }
+
+  .tab-button {
+    @apply rounded-2xl border px-3 py-3 text-left transition;
+    background: #000000;
+    border-color: rgba(111, 255, 145, 0.12);
+    color: var(--text-secondary);
+    box-shadow: inset 0 0 0 1px rgba(111, 255, 145, 0.04);
+  }
+
+  .tab-button:hover {
+    border-color: rgba(111, 255, 145, 0.28);
+    color: var(--text-primary);
+  }
+
+  .tab-button[data-active="true"] {
+    background: rgba(5, 18, 7, 1);
+    border-color: rgba(184, 255, 127, 0.42);
+    color: var(--text-primary);
+  }
+
+  .section-title {
+    color: var(--text-primary);
+    letter-spacing: -0.03em;
+  }
+
+  .section-copy {
+    color: var(--text-secondary);
+  }
+
+  .chart-shell {
+    box-shadow: inset 0 0 0 1px rgba(110, 255, 110, 0.05);
+    min-width: 0;
+    overflow: hidden;
+  }
+
+  .chart-shell canvas {
+    max-width: 100% !important;
+  }
+
+  .table-shell {
+    border-top: 1px solid rgba(111, 255, 145, 0.08);
+    padding-top: 0.75rem;
+  }
+
+  .process-row {
+    transition:
+      transform 140ms ease,
+      border-color 140ms ease,
+      box-shadow 140ms ease;
+  }
+
+  .process-row:hover {
+    border-color: rgba(184, 255, 127, 0.32);
+    transform: translateY(-1px);
   }
 }
