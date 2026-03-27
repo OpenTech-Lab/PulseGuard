@@ -94,6 +94,14 @@ function formatGigabytes(value: number) {
   })} GB`;
 }
 
+function formatSharePercent(value: number, maxValue: number) {
+  if (maxValue <= 0) {
+    return "0%";
+  }
+
+  return `${numberFormat.format((value / maxValue) * 100)}%`;
+}
+
 function formatCompactBytes(value: number) {
   const units = ["B", "K", "M", "G", "T"];
   let remainder = value;
@@ -124,6 +132,7 @@ function buildRainColumn(index: number) {
 function buildChartOptions(
   label: string,
   valueMode: "bytes" | "gigabytes" | "percent" = "percent",
+  maxValue?: number,
 ): ChartOptions<"line"> {
   return {
     animation: false,
@@ -180,6 +189,7 @@ function buildChartOptions(
       },
       y: {
         beginAtZero: true,
+        max: maxValue,
         grid: {
           color: "rgba(85, 255, 122, 0.08)",
         },
@@ -243,10 +253,12 @@ function StatusBadge({ status }: { status: MonitorMode }) {
 function MetricCard({
   label,
   value,
+  inlineDetail,
   detail,
 }: {
   label: string;
   value: string;
+  inlineDetail?: string;
   detail?: string;
 }) {
   return (
@@ -254,8 +266,18 @@ function MetricCard({
       <div className="text-[11px] uppercase tracking-[0.3em]" style={{ color: "var(--text-muted)" }}>
         {label}
       </div>
-      <div className="mt-2 font-mono text-2xl font-semibold" style={{ color: "var(--text-primary)" }}>
-        {value}
+      <div className="mt-2 flex items-end justify-between gap-3">
+        <div className="font-mono text-2xl font-semibold" style={{ color: "var(--text-primary)" }}>
+          {value}
+        </div>
+        {inlineDetail ? (
+          <div
+            className="shrink-0 font-mono text-xs uppercase tracking-[0.18em]"
+            style={{ color: "var(--text-secondary)" }}
+          >
+            {inlineDetail}
+          </div>
+        ) : null}
       </div>
       {detail ? (
         <div className="mt-1 text-[11px] uppercase tracking-[0.18em]" style={{ color: "var(--text-secondary)" }}>
@@ -608,6 +630,16 @@ export default function App() {
     dashboard.status === "running"
       ? { label: "Pause Monitoring", nextMode: "paused" as const }
       : { label: "Start Monitoring", nextMode: "running" as const };
+  const cpuChartMax = Math.max(100, dashboard.snapshot.totals.cpu_capacity_percent);
+  const memoryChartMax = Math.max(BYTES_PER_GB, dashboard.snapshot.totals.memory_capacity_bytes);
+  const cpuUsageShare = formatSharePercent(
+    dashboard.snapshot.totals.cpu_total,
+    dashboard.snapshot.totals.cpu_capacity_percent,
+  );
+  const memoryUsageShare = formatSharePercent(
+    dashboard.snapshot.totals.mem_total_bytes,
+    dashboard.snapshot.totals.memory_capacity_bytes,
+  );
 
   return (
     <main className="matrix-shell mx-auto flex min-h-screen max-w-6xl flex-col gap-5 px-4 py-4 lg:px-6">
@@ -697,15 +729,17 @@ export default function App() {
               </div>
               <div className="grid gap-3 lg:grid-cols-4">
                 <MetricCard label="Process Count" value={String(dashboard.snapshot.totals.process_count)} />
-                <MetricCard label="CPU Load" value={formatPercent(dashboard.snapshot.totals.cpu_total)} />
+                <MetricCard
+                  label="CPU Load"
+                  value={formatPercent(dashboard.snapshot.totals.cpu_total)}
+                  inlineDetail={`(${cpuUsageShare})`}
+                  detail={`${formatPercent(dashboard.snapshot.totals.cpu_capacity_percent)} max`}
+                />
                 <MetricCard
                   label="Memory Bank"
                   value={formatGigabytes(dashboard.snapshot.totals.mem_total_bytes)}
-                  detail={
-                    dashboard.snapshot.totals.memory_capacity_bytes > 0
-                      ? `${formatGigabytes(dashboard.snapshot.totals.memory_capacity_bytes)} max`
-                      : undefined
-                  }
+                  inlineDetail={`(${memoryUsageShare})`}
+                  detail={`${formatGigabytes(dashboard.snapshot.totals.memory_capacity_bytes)} max`}
                 />
                 <MetricCard
                   label="Net Flux"
@@ -774,12 +808,15 @@ export default function App() {
             <div className="grid min-w-0 gap-3">
               <div className="soft-panel chart-shell h-56 min-w-0 overflow-hidden p-3">
                 <div className="h-full min-w-0">
-                  <Line data={cpuHistory} options={buildChartOptions("CPU %", "percent")} />
+                  <Line data={cpuHistory} options={buildChartOptions("CPU %", "percent", cpuChartMax)} />
                 </div>
               </div>
               <div className="soft-panel chart-shell h-56 min-w-0 overflow-hidden p-3">
                 <div className="h-full min-w-0">
-                  <Line data={memoryHistory} options={buildChartOptions("Memory GB", "gigabytes")} />
+                  <Line
+                    data={memoryHistory}
+                    options={buildChartOptions("Memory GB", "gigabytes", memoryChartMax)}
+                  />
                 </div>
               </div>
             </div>

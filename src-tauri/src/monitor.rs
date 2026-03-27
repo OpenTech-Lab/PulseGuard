@@ -1,6 +1,7 @@
 use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::fs;
+use std::num::NonZeroUsize;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};
 use std::sync::{Arc, Condvar, Mutex, RwLock};
@@ -217,11 +218,13 @@ fn collect_snapshot(
     system.refresh_processes(ProcessesToUpdate::All, true);
 
     let timestamp = Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true);
+    let cpu_capacity_percent = logical_thread_count() as f64 * 100.0;
     let total_memory = system.total_memory().max(1);
     let used_memory = system.used_memory();
     let mut active_network = HashMap::new();
     let mut processes = Vec::new();
     let mut totals = SampleTotals {
+        cpu_capacity_percent,
         mem_total_bytes: used_memory,
         memory_capacity_bytes: total_memory,
         ..SampleTotals::default()
@@ -363,8 +366,9 @@ fn update_tray_tooltip(app: &AppHandle, mode: MonitorMode, snapshot: &DashboardS
         .map(short_timestamp)
         .unwrap_or_else(|| "waiting".into());
     let tooltip = format!(
-        "PulseGuard ({status})\nCPU: {:.1}% | Mem: {} / {}\nNet: {} down / {} up\nLast sample: {timestamp}",
+        "PulseGuard ({status})\nCPU: {:.1}% / {:.0}% | Mem: {} / {}\nNet: {} down / {} up\nLast sample: {timestamp}",
         snapshot.totals.cpu_total,
+        snapshot.totals.cpu_capacity_percent,
         human_gigabytes(snapshot.totals.mem_total_bytes),
         human_gigabytes(snapshot.totals.memory_capacity_bytes),
         human_bytes(snapshot.totals.net_recv_total),
@@ -396,4 +400,10 @@ fn human_bytes(value: u64) -> String {
 
 fn human_gigabytes(value: u64) -> String {
     format!("{:.1} GB", value as f64 / BYTES_PER_GIB)
+}
+
+fn logical_thread_count() -> usize {
+    std::thread::available_parallelism()
+        .unwrap_or(NonZeroUsize::MIN)
+        .get()
 }

@@ -15,6 +15,7 @@ export interface ProcessSample {
 
 export interface SampleTotals {
   cpu_total: number;
+  cpu_capacity_percent: number;
   mem_total_bytes: number;
   memory_capacity_bytes: number;
   disk_read_total: number;

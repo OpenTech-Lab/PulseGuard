@@ -50,6 +50,7 @@ pub struct ProcessSample {
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub struct SampleTotals {
     pub cpu_total: f64,
+    pub cpu_capacity_percent: f64,
     pub mem_total_bytes: u64,
     pub memory_capacity_bytes: u64,
     pub disk_read_total: u64,
