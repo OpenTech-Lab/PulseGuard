@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" fill="none">
+  <defs>
+    <linearGradient id="pulseguard-bg" x1="28" y1="24" x2="224" y2="228" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#1EA768" />
+      <stop offset="1" stop-color="#16452F" />
+    </linearGradient>
+  </defs>
+  <rect x="16" y="16" width="224" height="224" rx="56" fill="url(#pulseguard-bg)" />
+  <path
+    d="M40 136h34l18-36 32 72 22-50h22l12 14h36"
+    stroke="#F7FFF9"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+    stroke-width="18"
+  />
+  <path
+    d="M180 71c-12 0-22 9-24 20-2-11-12-20-24-20-14 0-26 12-26 27 0 39 50 63 50 63s50-24 50-63c0-15-12-27-26-27Z"
+    fill="#D7F5E3"
+    opacity="0.72"
+  />
+</svg>
