@@ -219,7 +219,7 @@ if [ -f "${PACKAGE_LOCK}" ]; then
 fi
 git -C "${PROJECT_ROOT}" add -A "${VERSION_DIR}"
 
-COMMIT_MSG="chore(release): cut ${VERSION_NAME}"
+COMMIT_MSG="chore(release): ${VERSION_NAME}"
 
 if git -C "${PROJECT_ROOT}" diff --cached --quiet; then
   echo "No staged release changes to commit."
