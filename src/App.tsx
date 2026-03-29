@@ -498,8 +498,8 @@ function ResourceResearchPage({
 
   const sortColumns: Array<[ResearchSortKey, string]> = [
     ["name", "Process"],
-    ["cpu_percent", "CPU"],
-    ["mem_bytes", "Memory"],
+    ["cpu_percent", "CPU %"],
+    ["mem_bytes", "Memory (GB)"],
     ["disk_read_bytes", "Disk R"],
     ["disk_write_bytes", "Disk W"],
     ["run_time_secs", "Running"],
@@ -507,7 +507,7 @@ function ResourceResearchPage({
   ];
 
   return (
-    <div className="fixed inset-0 z-50 flex flex-col overflow-hidden" style={{ background: "var(--bg-shell)" }}>
+    <div className="fixed inset-0 z-50 flex flex-col overflow-hidden" style={{ background: "rgba(0,0,0,0.82)" }}>
       <MatrixBackdrop />
       {/* Header */}
       <div className="glass-panel relative z-10 mx-4 mt-4 flex shrink-0 items-center gap-3 p-3">
@@ -516,13 +516,13 @@ function ResourceResearchPage({
         </button>
         <h2 className="section-title text-lg font-semibold">{researchTitles[resource]}</h2>
       </div>
-      {/* Chart + Table — always side by side */}
-      <div className="relative z-10 flex flex-1 flex-row gap-3 overflow-hidden p-4">
-        {/* Chart: fixed narrow column */}
-        <div className="soft-panel chart-shell w-44 shrink-0 overflow-hidden p-3">
+      {/* Chart on top, Table below */}
+      <div className="relative z-10 flex flex-1 flex-col gap-3 overflow-hidden p-4">
+        {/* Chart: fixed height row */}
+        <div className="soft-panel chart-shell h-44 shrink-0 overflow-hidden p-3">
           <Line data={chartData} options={chartOptions} />
         </div>
-        {/* Table: fills remaining width, scrolls internally */}
+        {/* Table: fills remaining height, scrolls internally */}
         <div className="glass-panel flex min-w-0 flex-1 flex-col overflow-hidden p-3">
           <div className="mb-2 shrink-0 text-[10px] uppercase tracking-[0.28em]" style={{ color: "var(--text-muted)" }}>
             {loading ? "Loading…" : `${sorted.length} processes`}
@@ -571,13 +571,28 @@ function ResourceResearchPage({
                         {proc.parent_pid ?? "—"}
                       </td>
                       <td className="rounded-r-2xl px-3 py-2">
-                        <span
-                          className="block w-40 truncate font-mono text-[10px]"
-                          style={{ color: "var(--text-secondary)" }}
-                          title={proc.exe_path}
-                        >
-                          {proc.exe_path || "—"}
-                        </span>
+                        <div className="flex items-center gap-1">
+                          <span
+                            className="block w-40 truncate font-mono text-[10px]"
+                            style={{ color: "var(--text-secondary)" }}
+                            title={proc.exe_path}
+                          >
+                            {proc.exe_path || "—"}
+                          </span>
+                          {proc.exe_path ? (
+                            <button
+                              className="shrink-0 opacity-40 hover:opacity-100 transition-opacity"
+                              onClick={() => void navigator.clipboard.writeText(proc.exe_path)}
+                              title="Copy full path"
+                              type="button"
+                            >
+                              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ color: "var(--text-secondary)" }}>
+                                <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
+                                <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+                              </svg>
+                            </button>
+                          ) : null}
+                        </div>
                       </td>
                     </tr>
                   ))}
@@ -611,7 +626,22 @@ export default function App() {
   const [researchResource, setResearchResource] = useState<ResearchResource | null>(null);
   const [richProcesses, setRichProcesses] = useState<RichProcess[]>([]);
   const [richProcessesLoading, setRichProcessesLoading] = useState(false);
+  const [isResizing, setIsResizing] = useState(false);
   const deferredSearch = useDeferredValue(search);
+
+  useEffect(() => {
+    let timer: ReturnType<typeof setTimeout>;
+    const onResize = () => {
+      setIsResizing(true);
+      clearTimeout(timer);
+      timer = setTimeout(() => setIsResizing(false), 300);
+    };
+    window.addEventListener("resize", onResize);
+    return () => {
+      window.removeEventListener("resize", onResize);
+      clearTimeout(timer);
+    };
+  }, []);
 
   async function hydrate(rangeHours: number) {
     try {
@@ -949,12 +979,21 @@ export default function App() {
   );
 
   return (
-    <main className="matrix-shell mx-auto flex min-h-screen max-w-6xl flex-col  ">
+    <main className="matrix-shell mx-auto flex h-screen max-w-6xl flex-col overflow-hidden">
       <MatrixBackdrop />
       <WindowChrome />
-      <div className="px-4 lg:px-6">
-      <section className="glass-panel overflow-hidden p-4 lg:p-5">
-        <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
+      <div
+          className="flex-1 overflow-x-hidden overflow-y-auto px-1 lg:px-2"
+          style={isResizing ? { pointerEvents: "none" } : undefined}
+          onMouseDown={(e) => {
+            const target = e.target as HTMLElement;
+            if (!target.closest("button, input, select, textarea, a, [role='button']")) {
+              e.preventDefault();
+            }
+          }}
+        >
+      <section className="glass-panel overflow-hidden p-2 lg:p-3">
+        <div className="mb-2 flex flex-wrap items-start justify-between gap-2">
           <div className="flex flex-wrap gap-2">
             <button
               className={`control-chip ${
@@ -996,12 +1035,12 @@ export default function App() {
           <StatusBadge status={dashboard.status} />
         </div>
 
-        <div className="grid gap-4">
+        <div className="grid gap-2">
           <div>
             <div className="hero-kicker text-[11px] uppercase tracking-[0.32em]" style={{ color: "var(--text-secondary)" }}>
               Zion Node 01 / Live Monitor
             </div>
-            <div className="hero-readout mt-3 grid gap-2 sm:grid-cols-3">
+            <div className="hero-readout mt-1 grid gap-1 sm:grid-cols-3">
               <div className="soft-panel px-3 py-2">
                 <div className="text-[11px] uppercase tracking-[0.28em]" style={{ color: "var(--text-muted)" }}>
                   Sync
@@ -1027,8 +1066,8 @@ export default function App() {
                 </div>
               </div>
             </div>
-            <div className="soft-panel mt-3 p-4">
-              <div className="mb-3 flex items-center justify-between gap-3">
+            <div className="soft-panel mt-1 p-2">
+              <div className="mb-2 flex items-center justify-between gap-2">
                 <span className="font-mono text-[11px]" style={{ color: "var(--text-secondary)" }}>
                   archive://pulseguard.db
                 </span>
@@ -1036,7 +1075,7 @@ export default function App() {
                   Signal Matrix
                 </span>
               </div>
-              <div className="grid gap-3 lg:grid-cols-4">
+              <div className="grid gap-2 lg:grid-cols-4">
                 <MetricCard
                   title="Processes"
                   label="Process Count"
@@ -1106,7 +1145,7 @@ export default function App() {
       </section>
 
       {activeTab === "activity" ? (
-        <section className="glass-panel min-w-0 overflow-hidden p-4 lg:p-5">
+        <section className="glass-panel min-w-0 overflow-hidden p-2 lg:p-3">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div>
               <h2 className="section-title text-xl font-semibold">Signal Deck</h2>
@@ -1124,14 +1163,14 @@ export default function App() {
               ))}
             </div>
           </div>
-          <div className="mt-4 grid min-w-0 gap-3 md:grid-cols-2">
-            <div className="grid min-w-0 gap-3">
-              <div className="soft-panel chart-shell h-56 min-w-0 overflow-hidden p-3">
+          <div className="mt-2 grid min-w-0 gap-2 md:grid-cols-2">
+            <div className="grid min-w-0 gap-2">
+              <div className="soft-panel chart-shell h-44 min-w-0 overflow-hidden p-2">
                 <div className="h-full min-w-0">
                   <Line data={cpuHistory} options={buildChartOptions("CPU %", "percent", cpuChartMax)} />
                 </div>
               </div>
-              <div className="soft-panel chart-shell h-56 min-w-0 overflow-hidden p-3">
+              <div className="soft-panel chart-shell h-44 min-w-0 overflow-hidden p-2">
                 <div className="h-full min-w-0">
                   <Line
                     data={memoryHistory}
@@ -1140,13 +1179,13 @@ export default function App() {
                 </div>
               </div>
             </div>
-            <div className="grid min-w-0 gap-3">
-              <div className="soft-panel chart-shell h-56 min-w-0 overflow-hidden p-3">
+            <div className="grid min-w-0 gap-2">
+              <div className="soft-panel chart-shell h-44 min-w-0 overflow-hidden p-2">
                 <div className="h-full min-w-0">
                   <Line data={networkHistory} options={buildChartOptions("Net I/O", "bytes")} />
                 </div>
               </div>
-              <div className="soft-panel chart-shell h-56 min-w-0 overflow-hidden p-3">
+              <div className="soft-panel chart-shell h-44 min-w-0 overflow-hidden p-2">
                 <div className="h-full min-w-0">
                   <Line data={diskHistory} options={buildChartOptions("Disk I/O", "bytes")} />
                 </div>
@@ -1157,7 +1196,7 @@ export default function App() {
       ) : null}
 
       {activeTab === "settings" ? (
-        <section className="glass-panel p-4 lg:p-5">
+        <section className="glass-panel p-2 lg:p-3">
           <div className="flex items-start justify-between gap-2">
             <div>
               <h2 className="section-title text-xl font-semibold">Control Deck</h2>
@@ -1171,7 +1210,7 @@ export default function App() {
               Save
             </button>
           </div>
-          <div className="mt-4 grid gap-3">
+          <div className="mt-2 grid gap-2">
             <label className="grid gap-2 text-sm font-medium">
               Sampling interval (seconds)
               <input
@@ -1239,8 +1278,8 @@ export default function App() {
       ) : null}
 
       {activeTab === "processes" ? (
-        <section className="glass-panel p-4 lg:p-5">
-          <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
+        <section className="glass-panel p-2 lg:p-3">
+          <div className="flex flex-col gap-2 lg:flex-row lg:items-end lg:justify-between">
             <div>
               <h2 className="section-title text-xl font-semibold">Process Ledger</h2>
             </div>
@@ -1271,8 +1310,8 @@ export default function App() {
                 <tr style={{ color: "var(--text-muted)" }}>
                   {[
                     ["name", "Process"],
-                    ["cpu_percent", "CPU"],
-                    ["mem_bytes", "Memory"],
+                    ["cpu_percent", "CPU %"],
+                    ["mem_bytes", "Memory (GB)"],
                     ["disk_read_bytes", "Disk Read"],
                     ["disk_write_bytes", "Disk Write"],
                   ].map(([key, label]) => (

@@ -2,6 +2,13 @@
 module.exports = {
   content: ["./index.html", "./src/**/*.{ts,tsx}"],
   theme: {
+    screens: {
+      sm: "480px",
+      md: "580px",
+      lg: "680px",
+      xl: "900px",
+      "2xl": "1200px",
+    },
     extend: {
       animation: {
         "pulse-enter": "pulse-enter 420ms ease-out",
