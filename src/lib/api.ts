@@ -6,6 +6,7 @@ import type {
   HistoryPoint,
   MonitorMode,
   MonitorSettings,
+  RichProcess,
 } from "../types";
 
 export function getDashboard(hours = 24) {
@@ -26,5 +27,9 @@ export function updateSettings(settings: MonitorSettings) {
 
 export function exportSamples(format: ExportFormat, hours = 24) {
   return invoke<ExportResult>("export_samples", { format, hours });
+}
+
+export function getProcesses() {
+  return invoke<RichProcess[]>("get_processes");
 }
 

@@ -116,3 +116,17 @@ pub struct ExportResult {
 pub struct StatusPayload {
     pub status: MonitorMode,
 }
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct RichProcess {
+    pub pid: i64,
+    pub parent_pid: Option<i64>,
+    pub name: String,
+    pub exe_path: String,
+    pub cpu_percent: f64,
+    pub mem_bytes: u64,
+    pub disk_read_bytes: u64,
+    pub disk_write_bytes: u64,
+    pub start_time: u64,
+    pub run_time_secs: u64,
+}

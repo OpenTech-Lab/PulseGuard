@@ -65,3 +65,16 @@ export interface ExportResult {
 export interface StatusPayload {
   status: MonitorMode;
 }
+
+export interface RichProcess {
+  pid: number;
+  parent_pid: number | null;
+  name: string;
+  exe_path: string;
+  cpu_percent: number;
+  mem_bytes: number;
+  disk_read_bytes: number;
+  disk_write_bytes: number;
+  start_time: number;
+  run_time_secs: number;
+}

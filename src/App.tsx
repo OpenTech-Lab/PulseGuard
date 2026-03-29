@@ -9,13 +9,13 @@ import {
   PointElement,
   Tooltip,
 } from "chart.js";
-import type { ChartOptions } from "chart.js";
+import type { ChartData, ChartOptions } from "chart.js";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { startTransition, useDeferredValue, useEffect, useEffectEvent, useState } from "react";
 import type { CSSProperties } from "react";
 import { Line } from "react-chartjs-2";
-import { exportSamples, getDashboard, setMonitorMode, updateSettings } from "./lib/api";
+import { exportSamples, getDashboard, getProcesses, setMonitorMode, updateSettings } from "./lib/api";
 import type {
   DashboardPayload,
   DashboardSnapshot,
@@ -24,6 +24,7 @@ import type {
   MonitorMode,
   MonitorSettings,
   ProcessSample,
+  RichProcess,
   StatusPayload,
 } from "./types";
 
@@ -56,6 +57,8 @@ type SortKey =
   | "disk_write_bytes";
 
 type TabKey = "activity" | "settings" | "processes";
+type ResearchResource = "cpu" | "memory" | "network" | "processes";
+type ResearchSortKey = "name" | "cpu_percent" | "mem_bytes" | "disk_read_bytes" | "disk_write_bytes" | "run_time_secs" | "start_time";
 const matrixGlyphs = [
   "10100101",
   "SYS",
@@ -127,6 +130,21 @@ function formatTimestamp(value: string | null) {
   return timestamp.toLocaleString();
 }
 
+function formatRunTime(seconds: number) {
+  if (seconds === 0) return "—";
+  const hours = Math.floor(seconds / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
+  const secs = seconds % 60;
+  if (hours > 0) return `${hours}h ${minutes}m`;
+  if (minutes > 0) return `${minutes}m ${secs}s`;
+  return `${secs}s`;
+}
+
+function formatUnixTimestamp(seconds: number) {
+  if (seconds === 0) return "—";
+  return new Date(seconds * 1000).toLocaleString();
+}
+
 function buildRainColumn(index: number) {
   return Array.from({ length: 18 }, (_, line) => matrixGlyphs[(index * 2 + line) % matrixGlyphs.length]).join("\n");
 }
@@ -164,7 +182,7 @@ function mergeHistoryPoint(history: HistoryPoint[], nextPoint: HistoryPoint, ran
 
 function buildChartOptions(
   label: string,
-  valueMode: "bytes" | "gigabytes" | "percent" = "percent",
+  valueMode: "bytes" | "gigabytes" | "percent" | "count" = "percent",
   maxValue?: number,
 ): ChartOptions<"line"> {
   return {
@@ -196,7 +214,9 @@ function buildChartOptions(
                 ? formatCompactBytes(value)
                 : valueMode === "gigabytes"
                   ? formatGigabytes(value)
-                  : formatPercent(value);
+                  : valueMode === "count"
+                    ? String(Math.round(value))
+                    : formatPercent(value);
             return `${context.dataset.label}: ${formatted}`;
           },
         },
@@ -340,14 +360,43 @@ function MetricCard({
   value,
   inlineDetail,
   detail,
+  title,
+  onResearch,
 }: {
   label: string;
   value: string;
   inlineDetail?: string;
   detail?: string;
+  title?: string;
+  onResearch?: () => void;
 }) {
   return (
     <div className="soft-panel animate-pulse-enter matrix-card p-4">
+      {(title !== undefined || onResearch !== undefined) ? (
+        <div className="mb-2 flex items-center justify-between">
+          {title !== undefined ? (
+            <span className="text-[10px] font-bold uppercase tracking-[0.25em]" style={{ color: "var(--accent)" }}>
+              {title}
+            </span>
+          ) : <span />}
+          {onResearch !== undefined ? (
+            <button
+              onClick={onResearch}
+              title="Research"
+              type="button"
+              className="rounded p-0.5 opacity-40 transition-opacity hover:opacity-100"
+              style={{ color: "var(--text-secondary)" }}
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                <circle cx="11" cy="11" r="8" />
+                <line x1="21" y1="21" x2="16.65" y2="16.65" />
+                <line x1="11" y1="8" x2="11" y2="14" />
+                <line x1="8" y1="11" x2="14" y2="11" />
+              </svg>
+            </button>
+          ) : null}
+        </div>
+      ) : null}
       <div className="text-[11px] uppercase tracking-[0.3em]" style={{ color: "var(--text-muted)" }}>
         {label}
       </div>
@@ -401,6 +450,152 @@ function MatrixBackdrop() {
   );
 }
 
+const researchTitles: Record<ResearchResource, string> = {
+  cpu: "CPU Load Analysis",
+  memory: "Memory Bank Analysis",
+  network: "Net Flux Analysis",
+  processes: "Process Registry",
+};
+
+function ResourceResearchPage({
+  resource,
+  processes,
+  loading,
+  chartData,
+  chartOptions,
+  onClose,
+}: {
+  resource: ResearchResource;
+  processes: RichProcess[];
+  loading: boolean;
+  chartData: ChartData<"line">;
+  chartOptions: ChartOptions<"line">;
+  onClose: () => void;
+}) {
+  const defaultSortKey: ResearchSortKey = resource === "memory" ? "mem_bytes" : "cpu_percent";
+  const [sortKey, setSortKey] = useState<ResearchSortKey>(defaultSortKey);
+  const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
+
+  function toggleResearchSort(key: ResearchSortKey) {
+    if (sortKey === key) {
+      setSortDir((d) => (d === "asc" ? "desc" : "asc"));
+    } else {
+      setSortKey(key);
+      setSortDir(key === "name" ? "asc" : "desc");
+    }
+  }
+
+  const sorted = [...processes].sort((a, b) => {
+    const aVal = a[sortKey];
+    const bVal = b[sortKey];
+    if (typeof aVal === "string" && typeof bVal === "string") {
+      return sortDir === "asc" ? aVal.localeCompare(bVal) : bVal.localeCompare(aVal);
+    }
+    const na = Number(aVal ?? 0);
+    const nb = Number(bVal ?? 0);
+    return sortDir === "asc" ? na - nb : nb - na;
+  });
+
+  const sortColumns: Array<[ResearchSortKey, string]> = [
+    ["name", "Process"],
+    ["cpu_percent", "CPU"],
+    ["mem_bytes", "Memory"],
+    ["disk_read_bytes", "Disk R"],
+    ["disk_write_bytes", "Disk W"],
+    ["run_time_secs", "Running"],
+    ["start_time", "Started"],
+  ];
+
+  return (
+    <div className="fixed inset-0 z-50 flex flex-col overflow-hidden" style={{ background: "var(--bg-shell)" }}>
+      <MatrixBackdrop />
+      {/* Header */}
+      <div className="glass-panel relative z-10 mx-4 mt-4 flex shrink-0 items-center gap-3 p-3">
+        <button className="control-chip flex items-center gap-1" onClick={onClose} type="button">
+          ← Back
+        </button>
+        <h2 className="section-title text-lg font-semibold">{researchTitles[resource]}</h2>
+      </div>
+      {/* Chart + Table — always side by side */}
+      <div className="relative z-10 flex flex-1 flex-row gap-3 overflow-hidden p-4">
+        {/* Chart: fixed narrow column */}
+        <div className="soft-panel chart-shell w-44 shrink-0 overflow-hidden p-3">
+          <Line data={chartData} options={chartOptions} />
+        </div>
+        {/* Table: fills remaining width, scrolls internally */}
+        <div className="glass-panel flex min-w-0 flex-1 flex-col overflow-hidden p-3">
+          <div className="mb-2 shrink-0 text-[10px] uppercase tracking-[0.28em]" style={{ color: "var(--text-muted)" }}>
+            {loading ? "Loading…" : `${sorted.length} processes`}
+          </div>
+          {loading ? (
+            <div className="flex flex-1 items-center justify-center text-sm" style={{ color: "var(--text-secondary)" }}>
+              Loading…
+            </div>
+          ) : (
+            <div className="min-h-0 flex-1 overflow-auto">
+              <table className="border-separate border-spacing-y-1.5 text-left text-xs">
+                <thead className="sticky top-0" style={{ background: "rgba(0,0,0,0.96)" }}>
+                  <tr style={{ color: "var(--text-muted)" }}>
+                    {sortColumns.map(([key, label]) => (
+                      <th key={key} className="whitespace-nowrap px-3 py-2 font-medium">
+                        <button
+                          className="flex items-center gap-1 uppercase tracking-[0.18em]"
+                          onClick={() => toggleResearchSort(key)}
+                          type="button"
+                        >
+                          {label}
+                          {sortKey === key ? (sortDir === "asc" ? " ↑" : " ↓") : ""}
+                        </button>
+                      </th>
+                    ))}
+                    <th className="whitespace-nowrap px-3 py-2 font-medium uppercase tracking-[0.18em]">Parent</th>
+                    <th className="whitespace-nowrap px-3 py-2 font-medium uppercase tracking-[0.18em]">Path</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {sorted.map((proc) => (
+                    <tr key={proc.pid} className="soft-panel process-row">
+                      <td className="whitespace-nowrap rounded-l-2xl px-3 py-2">
+                        <div className="font-semibold uppercase tracking-[0.08em]">{proc.name}</div>
+                        <div className="font-mono text-[10px]" style={{ color: "var(--text-muted)" }}>
+                          PID {proc.pid}
+                        </div>
+                      </td>
+                      <td className="whitespace-nowrap px-3 py-2 font-mono">{formatPercent(proc.cpu_percent)}</td>
+                      <td className="whitespace-nowrap px-3 py-2 font-mono">{formatGigabytes(proc.mem_bytes)}</td>
+                      <td className="whitespace-nowrap px-3 py-2 font-mono">{formatBytes(proc.disk_read_bytes)}</td>
+                      <td className="whitespace-nowrap px-3 py-2 font-mono">{formatBytes(proc.disk_write_bytes)}</td>
+                      <td className="whitespace-nowrap px-3 py-2 font-mono">{formatRunTime(proc.run_time_secs)}</td>
+                      <td className="whitespace-nowrap px-3 py-2 font-mono">{formatUnixTimestamp(proc.start_time)}</td>
+                      <td className="whitespace-nowrap px-3 py-2 font-mono" style={{ color: "var(--text-muted)" }}>
+                        {proc.parent_pid ?? "—"}
+                      </td>
+                      <td className="rounded-r-2xl px-3 py-2">
+                        <span
+                          className="block w-40 truncate font-mono text-[10px]"
+                          style={{ color: "var(--text-secondary)" }}
+                          title={proc.exe_path}
+                        >
+                          {proc.exe_path || "—"}
+                        </span>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              {sorted.length === 0 ? (
+                <div className="soft-panel mt-4 px-4 py-6 text-center text-xs" style={{ color: "var(--text-secondary)" }}>
+                  No process data. Start monitoring to collect data.
+                </div>
+              ) : null}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function App() {
   const [dashboard, setDashboard] = useState<DashboardPayload | null>(null);
   const [settingsDraft, setSettingsDraft] = useState<MonitorSettings | null>(null);
@@ -413,6 +608,9 @@ export default function App() {
   const [sortKey, setSortKey] = useState<SortKey>("cpu_percent");
   const [sortDirection, setSortDirection] = useState<"asc" | "desc">("desc");
   const [activeTab, setActiveTab] = useState<TabKey>("activity");
+  const [researchResource, setResearchResource] = useState<ResearchResource | null>(null);
+  const [richProcesses, setRichProcesses] = useState<RichProcess[]>([]);
+  const [richProcessesLoading, setRichProcessesLoading] = useState(false);
   const deferredSearch = useDeferredValue(search);
 
   async function hydrate(rangeHours: number) {
@@ -549,6 +747,20 @@ export default function App() {
     }
   }
 
+  async function openResearch(resource: ResearchResource) {
+    setResearchResource(resource);
+    setRichProcesses([]);
+    setRichProcessesLoading(true);
+    try {
+      const procs = await getProcesses();
+      setRichProcesses(procs);
+    } catch {
+      // table will show empty state
+    } finally {
+      setRichProcessesLoading(false);
+    }
+  }
+
   const rows = dashboard?.snapshot.processes ?? [];
   const filteredRows = [...rows]
     .filter((row) =>
@@ -656,6 +868,22 @@ export default function App() {
         data: (dashboard?.history ?? []).map((point) => point.disk_write_total),
         fill: true,
         label: "DISK_TX",
+        pointRadius: 0,
+        tension: 0.32,
+      },
+    ],
+    labels: chartLabels,
+  };
+
+  const processCountHistory = {
+    datasets: [
+      {
+        backgroundColor: "rgba(80, 255, 118, 0.14)",
+        borderColor: "rgba(118, 255, 145, 0.96)",
+        borderWidth: 2,
+        data: (dashboard?.history ?? []).map((point) => point.process_count),
+        fill: true,
+        label: "PROC_COUNT",
         pointRadius: 0,
         tension: 0.32,
       },
@@ -809,22 +1037,33 @@ export default function App() {
                 </span>
               </div>
               <div className="grid gap-3 lg:grid-cols-4">
-                <MetricCard label="Process Count" value={String(dashboard.snapshot.totals.process_count)} />
                 <MetricCard
+                  title="Processes"
+                  label="Process Count"
+                  value={String(dashboard.snapshot.totals.process_count)}
+                  onResearch={() => void openResearch("processes")}
+                />
+                <MetricCard
+                  title="CPU Load"
                   label="CPU Load"
                   value={formatPercent(dashboard.snapshot.totals.cpu_total)}
                   inlineDetail={`(${cpuUsageShare})`}
                   detail={`${formatPercent(dashboard.snapshot.totals.cpu_capacity_percent)} max`}
+                  onResearch={() => void openResearch("cpu")}
                 />
                 <MetricCard
+                  title="Memory Bank"
                   label="Memory Bank"
                   value={formatGigabytes(dashboard.snapshot.totals.mem_total_bytes)}
                   inlineDetail={`(${memoryUsageShare})`}
                   detail={`${formatGigabytes(dashboard.snapshot.totals.memory_capacity_bytes)} max`}
+                  onResearch={() => void openResearch("memory")}
                 />
                 <MetricCard
+                  title="Network I/O"
                   label="Net Flux"
                   value={`${formatCompactBytes(dashboard.snapshot.totals.net_recv_total)}↓ / ${formatCompactBytes(dashboard.snapshot.totals.net_sent_total)}↑`}
+                  onResearch={() => void openResearch("network")}
                 />
               </div>
             </div>
@@ -1027,7 +1266,7 @@ export default function App() {
             </div>
           </div>
           <div className="mt-3 overflow-x-auto table-shell">
-            <table className="min-w-full border-separate border-spacing-y-2 text-left text-sm">
+            <table className="border-separate border-spacing-y-2 text-left text-sm">
               <thead>
                 <tr style={{ color: "var(--text-muted)" }}>
                   {[
@@ -1037,7 +1276,7 @@ export default function App() {
                     ["disk_read_bytes", "Disk Read"],
                     ["disk_write_bytes", "Disk Write"],
                   ].map(([key, label]) => (
-                    <th key={key} className="px-3 py-2 font-medium">
+                    <th key={key} className="whitespace-nowrap px-3 py-2 font-medium">
                       <button
                         className="flex items-center gap-2 uppercase tracking-[0.18em]"
                         onClick={() => toggleSort(key as SortKey)}
@@ -1053,16 +1292,16 @@ export default function App() {
               <tbody>
                 {filteredRows.map((row: ProcessSample) => (
                   <tr key={`${row.pid}-${row.timestamp}`} className="soft-panel process-row">
-                    <td className="rounded-l-2xl px-3 py-2.5">
+                    <td className="whitespace-nowrap rounded-l-2xl px-3 py-2.5">
                       <div className="font-semibold uppercase tracking-[0.08em]">{row.name}</div>
                       <div className="font-mono text-[11px]" style={{ color: "var(--text-muted)" }}>
                         PID {row.pid}
                       </div>
                     </td>
-                    <td className="px-3 py-2.5 font-mono">{formatPercent(row.cpu_percent)}</td>
-                    <td className="px-3 py-2.5 font-mono">{formatGigabytes(row.mem_bytes)}</td>
-                    <td className="px-3 py-2.5 font-mono">{formatBytes(row.disk_read_bytes)}</td>
-                    <td className="rounded-r-2xl px-3 py-2.5 font-mono">{formatBytes(row.disk_write_bytes)}</td>
+                    <td className="whitespace-nowrap px-3 py-2.5 font-mono">{formatPercent(row.cpu_percent)}</td>
+                    <td className="whitespace-nowrap px-3 py-2.5 font-mono">{formatGigabytes(row.mem_bytes)}</td>
+                    <td className="whitespace-nowrap px-3 py-2.5 font-mono">{formatBytes(row.disk_read_bytes)}</td>
+                    <td className="whitespace-nowrap rounded-r-2xl px-3 py-2.5 font-mono">{formatBytes(row.disk_write_bytes)}</td>
                   </tr>
                 ))}
               </tbody>
@@ -1079,6 +1318,32 @@ export default function App() {
         </section>
       ) : null}
       </div>
+      {researchResource !== null ? (
+        <ResourceResearchPage
+          resource={researchResource}
+          processes={richProcesses}
+          loading={richProcessesLoading}
+          chartData={
+            researchResource === "cpu"
+              ? (cpuHistory as ChartData<"line">)
+              : researchResource === "memory"
+                ? (memoryHistory as ChartData<"line">)
+                : researchResource === "network"
+                  ? (networkHistory as ChartData<"line">)
+                  : (processCountHistory as ChartData<"line">)
+          }
+          chartOptions={
+            researchResource === "cpu"
+              ? buildChartOptions("CPU %", "percent", cpuChartMax)
+              : researchResource === "memory"
+                ? buildChartOptions("Memory GB", "gigabytes", memoryChartMax)
+                : researchResource === "network"
+                  ? buildChartOptions("Net I/O", "bytes")
+                  : buildChartOptions("Proc Count", "count")
+          }
+          onClose={() => setResearchResource(null)}
+        />
+      ) : null}
     </main>
   );
 }

@@ -17,8 +17,8 @@
       {
         "label": "main",
         "title": "PulseGuard",
-        "width": 1440,
-        "height": 960,
+        "width": 720,
+        "height": 480,
         "minWidth": 590,
         "minHeight": 380,
         "resizable": true,

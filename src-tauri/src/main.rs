@@ -10,6 +10,7 @@ use std::sync::{Arc, RwLock};
 
 use models::{
     DashboardPayload, ExportFormat, ExportResult, HistoryPoint, MonitorMode, MonitorSettings,
+    RichProcess,
 };
 use monitor::MonitorController;
 use storage::AppPaths;
@@ -95,6 +96,41 @@ fn export_samples(
     .map_err(|error| error.to_string())
 }
 
+#[tauri::command]
+fn get_processes(state: State<'_, AppState>) -> Vec<RichProcess> {
+    use sysinfo::{Pid, ProcessesToUpdate, System};
+
+    let snapshot = state.monitor.snapshot();
+    let mut sys = System::new();
+    sys.refresh_processes(ProcessesToUpdate::All, false);
+
+    snapshot
+        .processes
+        .iter()
+        .map(|sample| {
+            let pid = Pid::from(sample.pid as usize);
+            let proc_info = sys.process(pid);
+            RichProcess {
+                pid: sample.pid,
+                parent_pid: proc_info
+                    .and_then(|p| p.parent())
+                    .map(|p| i64::from(p.as_u32())),
+                name: sample.name.clone(),
+                exe_path: proc_info
+                    .and_then(|p| p.exe())
+                    .map(|p| p.to_string_lossy().to_string())
+                    .unwrap_or_default(),
+                cpu_percent: sample.cpu_percent,
+                mem_bytes: sample.mem_bytes,
+                disk_read_bytes: sample.disk_read_bytes,
+                disk_write_bytes: sample.disk_write_bytes,
+                start_time: proc_info.map(|p| p.start_time()).unwrap_or(0),
+                run_time_secs: proc_info.map(|p| p.run_time()).unwrap_or(0),
+            }
+        })
+        .collect()
+}
+
 fn main() {
     tauri::Builder::default()
         .setup(|app| -> Result<(), Box<dyn std::error::Error>> {
@@ -145,7 +181,8 @@ fn main() {
             get_history,
             set_monitor_mode,
             update_settings,
-            export_samples
+            export_samples,
+            get_processes
         ])
         .run(tauri::generate_context!())
         .expect("failed to run PulseGuard");
